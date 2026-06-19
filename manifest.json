@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "xcsh for F5 XC",
+  "description": "xcsh Chrome extension for F5 Distributed Cloud console automation",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqIefD6PaHE/KafKxVkYGPZuOqx+0K5dihMiN5fCeHjjFNSo5EQzSp/zXF+vGHnFnIcb+TZqkQ6m9MH4PZ/0h8LqJlCL/4l2WkKsMq7K1fcEwlOyXcz2RjqPH3mN90JTFRFrFHzv5eVzV/Sn1vfnPCY4D7VhiXIlFeYEkWMV+G3mj4EDhHJK5N3IGJ4klJFKRfzpOJKL3UL6vNqGsMwZmWN4pSLaTEakMhkCzmwrZEjgz6xBF7rCJdN9DmIb5TOvpYGOhFqJWr5Qo+0+LNqoq/7QCxZA/BvvXJN4nyaI8l4KJAdYM8V/eVlRi0LRaA0v2SzXFyg9evJO0t2npRB4QIDAQAB",
+  "permissions": [
+    "debugger",
+    "nativeMessaging",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "activeTab",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.volterra.us/*",
+    "https://*.console.ves.volterra.io/*"
+  ],
+  "background": {
+    "service_worker": "dist/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.volterra.us/*",
+        "https://*.console.ves.volterra.io/*"
+      ],
+      "js": ["dist/accessibility-tree.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ]
+}
