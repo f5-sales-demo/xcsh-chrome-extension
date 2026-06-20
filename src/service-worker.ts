@@ -37,12 +37,18 @@ const attachedTabs = new Set<number>();
 
 function connect(): void {
   if (port) return;
-  port = chrome.runtime.connectNative(NATIVE_HOST);
-  port.onMessage.addListener(onMessage);
-  port.onDisconnect.addListener(() => {
-    // The reconnect alarm will bring us back up.
+  try {
+    port = chrome.runtime.connectNative(NATIVE_HOST);
+    port.onMessage.addListener(onMessage);
+    port.onDisconnect.addListener(() => {
+      // The reconnect alarm will bring us back up.
+      port = null;
+    });
+  } catch {
+    // Native host not available yet (e.g. xcsh not running at startup).
+    // Silently retry on the next reconnect alarm — no extension error badge.
     port = null;
-  });
+  }
 }
 
 function onMessage(msg: any): void {
@@ -80,6 +86,39 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     connect();
   }
 });
+
+// --- Runtime messages from the options page + visual indicator -------------
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || typeof msg !== "object") return;
+
+  if (msg.type === "status_request") {
+    sendResponse({ connected: !!port });
+    return; // synchronous response
+  }
+
+  if (msg.type === "stop_agent") {
+    stopAgent();
+    return;
+  }
+});
+
+/** Stop the agent: detach the debugger and hide the on-page indicator. */
+function stopAgent(): void {
+  if (targetTabId !== undefined) {
+    detach().catch(() => {});
+  }
+  // Hide the visual indicator on all scoped console tabs.
+  chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS }).then((tabs) => {
+    for (const tab of tabs) {
+      if (tab.id !== undefined) {
+        chrome.tabs
+          .sendMessage(tab.id, { type: "indicator_hide" })
+          .catch(() => {});
+      }
+    }
+  });
+}
 
 // --- Tool implementations --------------------------------------------------
 
