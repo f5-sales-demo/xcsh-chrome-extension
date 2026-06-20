@@ -388,6 +388,18 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // Wait for navigation to complete on that tab (race with a timeout).
   await waitForNavigation(tabId);
 
+  // After extension reload or "same URL" navigation, the manifest content_scripts
+  // may NOT re-inject. Programmatically inject the accessibility-tree content script
+  // so __xcshReadAx is always available on the new page.
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["accessibility-tree.js"],
+    });
+  } catch {
+    // Non-fatal: the content script may have already been injected by the manifest.
+  }
+
   return { tabId };
 }
 
