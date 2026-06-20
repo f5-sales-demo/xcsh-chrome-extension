@@ -6,6 +6,13 @@
  * scoped F5 XC console tab via chrome.scripting + chrome.debugger.
  */
 
+import {
+  matchNode,
+  matchNodes,
+  parseLocator,
+  type AxNode,
+} from "./vendored-resolver";
+
 const NATIVE_HOST = "com.f5xc.xcsh.chrome_host";
 const RECONNECT_ALARM = "reconnect";
 const VERSION = "0.1.0";
@@ -133,6 +140,15 @@ async function runTool(tool: string, params: any): Promise<unknown> {
     case "read_ax":
       return readAx();
 
+    case "wait_for":
+      return waitFor(params);
+
+    case "assert_text":
+      return assertText(params);
+
+    case "find":
+      return find(params);
+
     case "click":
       return click(params);
 
@@ -215,13 +231,80 @@ function requireTab(): number {
   return targetTabId;
 }
 
-async function readAx(): Promise<unknown> {
+/** Run `__xcshReadAx()` in the target tab and return the AX tree. */
+async function readAxFromTab(): Promise<AxNode> {
   const tabId = requireTab();
   const result = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => (globalThis as any).__xcshReadAx(),
   });
-  return result[0]?.result;
+  return result[0]?.result as AxNode;
+}
+
+async function readAx(): Promise<unknown> {
+  return readAxFromTab();
+}
+
+async function waitFor(params: {
+  selector: string;
+  context?: string;
+  timeoutMs?: number;
+}): Promise<{ found: true; ref: string }> {
+  // TODO: context scoping — `context` is ignored in Phase 1; a plain matchNode
+  // suffices. Phase 2 adds scoped resolution via findSectionContainer.
+  const selector = params?.selector;
+  const timeoutMs = params?.timeoutMs ?? 30_000;
+  const loc = parseLocator(selector);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tree = await readAxFromTab();
+    try {
+      const node = matchNode(tree, loc);
+      return { found: true, ref: node.ref as string };
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  throw new Error(`wait_for "${selector}" timed out after ${timeoutMs}ms`);
+}
+
+async function assertText(params: {
+  selector: string;
+  expected: string;
+  context?: string;
+}): Promise<{ asserted: true; text: string }> {
+  // TODO: context scoping — `context` is ignored in Phase 1.
+  const tabId = requireTab();
+  const { selector, expected } = params;
+  const tree = await readAxFromTab();
+  const node = matchNode(tree, parseLocator(selector));
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (r: string) => (globalThis as any).__xcshGetInnerText(r),
+    args: [node.ref as string],
+  });
+  const text = (result?.result as string) ?? "";
+  if (!text.includes(expected)) {
+    throw new Error(
+      `assert failed: "${expected}" not in "${text.slice(0, 200)}"`,
+    );
+  }
+  return { asserted: true, text: text.slice(0, 200) };
+}
+
+async function find(params: {
+  selector: string;
+}): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
+  const { selector } = params;
+  const tree = await readAxFromTab();
+  const nodes = matchNodes(tree, parseLocator(selector));
+  return {
+    refs: nodes.slice(0, 20).map((n) => ({
+      ref: n.ref as string,
+      role: n.role,
+      name: (n.name as string) ?? "",
+    })),
+  };
 }
 
 async function click(params: {
