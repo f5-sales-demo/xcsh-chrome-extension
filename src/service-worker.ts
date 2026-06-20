@@ -139,6 +139,12 @@ async function runTool(tool: string, params: any): Promise<unknown> {
     case "screenshot":
       return screenshot();
 
+    case "form_input":
+      return formInput(params);
+
+    case "key_press":
+      return keyPress(params);
+
     case "detach":
       return detach();
 
@@ -236,7 +242,7 @@ async function click(params: {
   }
   const { x, y } = coords;
 
-  await ensureAttached(tabId);
+  await ensureDebuggerAttached(tabId);
 
   await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
     type: "mousePressed",
@@ -258,13 +264,90 @@ async function click(params: {
 
 async function screenshot(): Promise<{ data: string }> {
   const tabId = requireTab();
-  await ensureAttached(tabId);
+  await ensureDebuggerAttached(tabId);
   const result = (await chrome.debugger.sendCommand(
     { tabId },
     "Page.captureScreenshot",
     { format: "png" },
   )) as { data: string };
   return { data: result.data };
+}
+
+async function formInput(params: {
+  ref: string;
+  value: string;
+}): Promise<{ filled: string; value: string }> {
+  const tabId = requireTab();
+  const ref = params?.ref;
+  const value = params?.value;
+
+  // Commit the value via the content-script helper (handles vsui-input quirks).
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (r: string, v: string) =>
+      (globalThis as any).__xcshCommitInputValue(r, v),
+    args: [ref, value],
+  });
+  const r0 = result[0] as { error?: { message?: string } } | undefined;
+  if (r0?.error) {
+    throw new Error(r0.error.message ?? `form_input failed for ref: ${ref}`);
+  }
+
+  return { filled: ref, value };
+}
+
+// Special (non-printable) keys mapped to the fields Input.dispatchKeyEvent
+// expects. Printable characters are derived inline in keyPress.
+const SPECIAL_KEYS: Record<
+  string,
+  { key: string; code: string; keyCode: number }
+> = {
+  Enter: { key: "Enter", code: "Enter", keyCode: 13 },
+  Tab: { key: "Tab", code: "Tab", keyCode: 9 },
+  Backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+  Escape: { key: "Escape", code: "Escape", keyCode: 27 },
+  ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+  ArrowUp: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+  Space: { key: " ", code: "Space", keyCode: 32 },
+};
+
+async function keyPress(params: {
+  key: string;
+}): Promise<{ pressed: string }> {
+  const tabId = requireTab();
+  const key = params?.key;
+  if (typeof key !== "string" || key.length === 0) {
+    throw new Error("key_press: key is required");
+  }
+
+  let mapped: { key: string; code: string; keyCode: number };
+  if (key in SPECIAL_KEYS) {
+    mapped = SPECIAL_KEYS[key];
+  } else if (key.length === 1) {
+    // Single printable character.
+    const upper = key.toUpperCase();
+    mapped = { key, code: `Key${upper}`, keyCode: upper.charCodeAt(0) };
+  } else {
+    throw new Error(`key_press: unsupported key: ${key}`);
+  }
+
+  await ensureDebuggerAttached(tabId);
+
+  const base = {
+    key: mapped.key,
+    code: mapped.code,
+    windowsVirtualKeyCode: mapped.keyCode,
+  };
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+    type: "keyDown",
+    ...base,
+  });
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+    type: "keyUp",
+    ...base,
+  });
+
+  return { pressed: key };
 }
 
 async function detach(): Promise<{ detached: true }> {
@@ -274,15 +357,25 @@ async function detach(): Promise<{ detached: true }> {
   return { detached: true };
 }
 
-async function ensureAttached(tabId: number): Promise<void> {
+async function ensureDebuggerAttached(tabId: number): Promise<void> {
   if (attachedTabs.has(tabId)) return;
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
-  } catch (e) {
-    // Already attached is fine; rethrow anything else.
-    if (!/already attached/i.test(String(e))) throw e;
+    attachedTabs.add(tabId);
+  } catch (e: any) {
+    // Already attached is fine — record it and move on.
+    if (/already attached/i.test(e?.message ?? String(e))) {
+      attachedTabs.add(tabId);
+      return;
+    }
+    // Anything else: surface an actionable error. The overall timeout is
+    // handled upstream by the bridge's request timeout, not here.
+    throw new Error(
+      `chrome.debugger.attach failed for tab ${tabId}: ${e?.message ?? e}. ` +
+        `If Chrome shows a "debugging started" bar, click "Cancel" to ` +
+        `dismiss it — xcsh will retry.`,
+    );
   }
-  attachedTabs.add(tabId);
 }
 
 // Keep `attachedTabs` consistent if the debugger detaches out-of-band
