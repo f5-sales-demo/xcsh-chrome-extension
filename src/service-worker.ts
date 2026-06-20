@@ -42,6 +42,51 @@ let targetTabId: number | undefined;
 // re-attaching needlessly.
 const attachedTabs = new Set<number>();
 
+// Allowed console URL patterns for tabs_list (mirrors host_permissions).
+const ALLOWED_PATTERNS = [
+  "https://*.volterra.us/*",
+  "https://*.console.ves.volterra.io/*",
+];
+
+// --- Diagnostic event buffers (read_console / read_network) ----------------
+
+// Ring buffers of CDP events, capped at 500 entries each.
+const consoleBuffer: any[] = [];
+const networkBuffer: any[] = [];
+let observingConsole = false;
+let observingNetwork = false;
+
+async function enableConsoleObserver(): Promise<void> {
+  if (observingConsole) return;
+  const tabId = requireTab();
+  await ensureDebuggerAttached(tabId);
+  await chrome.debugger.sendCommand({ tabId }, "Runtime.enable", {});
+  observingConsole = true;
+}
+
+async function enableNetworkObserver(): Promise<void> {
+  if (observingNetwork) return;
+  const tabId = requireTab();
+  await ensureDebuggerAttached(tabId);
+  await chrome.debugger.sendCommand({ tabId }, "Network.enable", {});
+  observingNetwork = true;
+}
+
+// Push CDP events for the target tab into the diagnostic ring buffers.
+chrome.debugger.onEvent.addListener((source, method, eventParams) => {
+  if (source.tabId === undefined || source.tabId !== targetTabId) return;
+  if (method === "Runtime.consoleAPICalled") {
+    consoleBuffer.push(eventParams);
+    if (consoleBuffer.length > 500) consoleBuffer.shift();
+  } else if (
+    method === "Network.requestWillBeSent" ||
+    method === "Network.responseReceived"
+  ) {
+    networkBuffer.push({ method, ...(eventParams as any) });
+    if (networkBuffer.length > 500) networkBuffer.shift();
+  }
+});
+
 function connect(): void {
   if (port) return;
   try {
@@ -130,12 +175,67 @@ function stopAgent(): void {
 // --- Tool implementations --------------------------------------------------
 
 async function runTool(tool: string, params: any): Promise<unknown> {
+  // Pulse the on-page indicator while any non-trivial tool runs.
+  const broadcastsIndicator = tool !== "ping";
+  if (broadcastsIndicator && targetTabId !== undefined) {
+    chrome.tabs
+      .sendMessage(targetTabId, { type: "indicator_show" })
+      .catch(() => {});
+  }
+  try {
+    return await dispatchTool(tool, params);
+  } finally {
+    if (broadcastsIndicator && targetTabId !== undefined) {
+      chrome.tabs
+        .sendMessage(targetTabId, { type: "indicator_hide" })
+        .catch(() => {});
+    }
+  }
+}
+
+async function dispatchTool(tool: string, params: any): Promise<unknown> {
   switch (tool) {
     case "ping":
       return { ok: true, version: VERSION };
 
     case "navigate":
       return navigate(params);
+
+    case "select_option":
+      return selectOption(params);
+
+    case "scroll_to":
+      return scrollTo(params);
+
+    case "get_page_text":
+      return getPageText();
+
+    case "javascript_tool":
+      return javascriptTool(params);
+
+    case "tabs_list":
+      return tabsList();
+
+    case "tabs_create":
+      return tabsCreate(params);
+
+    case "tabs_close":
+      return tabsClose(params);
+
+    case "resize_window":
+      return resizeWindow(params);
+
+    case "read_console":
+      return readConsole(params);
+
+    case "read_network":
+      return readNetwork(params);
+
+    case "file_upload":
+      return fileUpload(params);
+
+    case "browser_batch":
+      return browserBatch(params);
 
     case "read_ax":
       return readAx();
@@ -438,6 +538,198 @@ async function detach(): Promise<{ detached: true }> {
   await chrome.debugger.detach({ tabId }).catch(() => {});
   attachedTabs.delete(tabId);
   return { detached: true };
+}
+
+// --- Content-script-backed tools -------------------------------------------
+
+async function selectOption(params: {
+  ref: string;
+  value: string;
+}): Promise<{ selected: string; ref: string }> {
+  const tabId = requireTab();
+  const { ref, value } = params;
+  const [r] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (rr: string, vv: string) =>
+      (globalThis as any).__xcshSelectOption(rr, vv),
+    args: [ref, value],
+  });
+  if (!r?.result) {
+    throw new Error(`option "${value}" not found in select ${ref}`);
+  }
+  return { selected: value, ref };
+}
+
+async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> {
+  const tabId = requireTab();
+  const { ref } = params;
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (rr: string) => (globalThis as any).__xcshScrollTo(rr),
+    args: [ref],
+  });
+  return { scrolled: ref };
+}
+
+async function getPageText(): Promise<{ text: string }> {
+  const tabId = requireTab();
+  const [r] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => (globalThis as any).__xcshGetPageText(),
+  });
+  return { text: (r?.result as string) ?? "" };
+}
+
+// --- JavaScript evaluation (domain-scoped) ---------------------------------
+
+async function javascriptTool(params: {
+  code: string;
+}): Promise<{ result: unknown }> {
+  const tabId = requireTab();
+  // Domain-scope: the tab's current URL must be a scoped console URL.
+  const tab = await chrome.tabs.get(tabId);
+  if (typeof tab.url !== "string" || !isScopedUrl(tab.url)) {
+    throw new Error(
+      `javascript_tool: tab is not on a scoped console domain: ${tab.url}`,
+    );
+  }
+  await ensureDebuggerAttached(tabId);
+  const result = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+    expression: params.code,
+    returnByValue: true,
+    awaitPromise: true,
+  })) as any;
+  return { result: result?.result?.value };
+}
+
+// --- Tab / window management -----------------------------------------------
+
+async function tabsList(): Promise<{
+  tabs: Array<{
+    id: number | undefined;
+    url: string | undefined;
+    title: string | undefined;
+    active: boolean;
+  }>;
+}> {
+  const tabs = await chrome.tabs.query({ url: ALLOWED_PATTERNS });
+  return {
+    tabs: tabs.map((t) => ({
+      id: t.id,
+      url: t.url,
+      title: t.title,
+      active: t.active,
+    })),
+  };
+}
+
+async function tabsCreate(params: {
+  url: string;
+}): Promise<{ tabId: number | undefined }> {
+  const url = params?.url;
+  if (typeof url !== "string" || !isScopedUrl(url)) {
+    throw new Error(`tabs_create: url not in scoped console domains: ${url}`);
+  }
+  const tab = await chrome.tabs.create({ url, active: true });
+  if (tab.id !== undefined) targetTabId = tab.id;
+  return { tabId: tab.id };
+}
+
+async function tabsClose(params: {
+  tabId: number;
+}): Promise<{ closed: number }> {
+  const { tabId } = params;
+  await chrome.tabs.remove(tabId);
+  return { closed: tabId };
+}
+
+async function resizeWindow(params: {
+  width: number;
+  height: number;
+}): Promise<{ resized: { width: number; height: number } }> {
+  const tabId = requireTab();
+  const { width, height } = params;
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.windowId !== undefined) {
+    await chrome.windows.update(tab.windowId, { width, height });
+  }
+  return { resized: { width, height } };
+}
+
+// --- Diagnostic reads (console / network) ----------------------------------
+
+async function readConsole(params: {
+  pattern?: string;
+}): Promise<{ messages: Array<{ type: string; text: string }> }> {
+  await enableConsoleObserver();
+  const pattern = params?.pattern;
+  let entries = consoleBuffer.map((e: any) => ({
+    type: e.type,
+    text: (e.args ?? [])
+      .map((a: any) => a.value ?? a.description)
+      .join(" "),
+  }));
+  if (pattern) entries = entries.filter((e) => e.text?.includes(pattern));
+  return { messages: entries.slice(-100) };
+}
+
+async function readNetwork(params: {
+  pattern?: string;
+}): Promise<{
+  requests: Array<{
+    method: string;
+    url: string | undefined;
+    status: number | undefined;
+  }>;
+}> {
+  await enableNetworkObserver();
+  const pattern = params?.pattern;
+  let entries = networkBuffer.map((e: any) => ({
+    method: e.method,
+    url: e.request?.url ?? e.response?.url,
+    status: e.response?.status,
+  }));
+  if (pattern) entries = entries.filter((e) => e.url?.includes(pattern));
+  return { requests: entries.slice(-100) };
+}
+
+// --- File upload (best-effort, Phase 1) ------------------------------------
+
+async function fileUpload(params: {
+  ref: string;
+  files: string[];
+}): Promise<{ uploaded: string; fileCount: number; note: string }> {
+  const { ref, files } = params;
+  // Full implementation (Runtime.evaluate -> backendNodeId ->
+  // DOM.setFileInputFiles) is Phase 2; resolving a WeakRef handle to a backend
+  // node id is nontrivial. Return a best-effort acknowledgement for now.
+  return {
+    uploaded: ref,
+    fileCount: Array.isArray(files) ? files.length : 0,
+    note: "file_upload full implementation is Phase 2",
+  };
+}
+
+// --- Batch ------------------------------------------------------------------
+
+async function browserBatch(params: {
+  actions: Array<{ tool: string; params: any }>;
+}): Promise<{
+  results: Array<{ tool: string; content: unknown; is_error: boolean }>;
+}> {
+  const actions = params?.actions ?? [];
+  const results: Array<{ tool: string; content: unknown; is_error: boolean }> =
+    [];
+  for (const action of actions) {
+    try {
+      const content = await runTool(action.tool, action.params);
+      results.push({ tool: action.tool, content, is_error: false });
+    } catch (e) {
+      results.push({ tool: action.tool, content: String(e), is_error: true });
+      break; // abort the batch on first error
+    }
+  }
+  return { results };
 }
 
 async function ensureDebuggerAttached(tabId: number): Promise<void> {
