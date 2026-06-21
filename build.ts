@@ -5,6 +5,7 @@ await Bun.build({
   outdir: "dist",
   target: "browser",
   minify: false,
+  format: "iife", // Content scripts must be classic scripts (not ESM) — an `export` causes SyntaxError
 });
 
 await Bun.build({
@@ -20,6 +21,7 @@ await Bun.build({
   outdir: "dist",
   target: "browser",
   minify: false,
+  format: "iife", // Content script — must be classic script
 });
 
 await Bun.build({
