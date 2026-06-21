@@ -405,13 +405,21 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
-    // Clear the page's beforeunload handler so "Leave site?" never fires when
-    // we navigate away from a dirty form. The debugger can't auto-handle it
-    // (freezes the SW), so nuke it via executeScript before tabs.update.
+    // Suppress the "Leave site?" beforeunload dialog that the XC Angular SPA
+    // registers via addEventListener (not window.onbeforeunload). Install a
+    // capture-phase interceptor that stops propagation before the app's handler
+    // can set e.returnValue, so Chrome never shows the dialog.
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => { window.onbeforeunload = null; },
+        func: () => {
+          window.onbeforeunload = null;
+          window.addEventListener(
+            "beforeunload",
+            (e) => { e.stopImmediatePropagation(); },
+            true, // capture phase — fires before the app's bubble-phase handler
+          );
+        },
       });
     } catch { /* page may not be scriptable (chrome:// etc) */ }
     await chrome.tabs.update(tabId, { url, active: true });
