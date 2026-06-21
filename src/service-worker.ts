@@ -436,10 +436,8 @@ async function login(params: {
   }
   // Only the console domain is a valid login target — reject anything else so
   // credentials can never be navigated to / injected into a foreign host.
-  let consoleHost: string;
   try {
     const parsed = new URL(consoleUrl);
-    consoleHost = parsed.hostname;
     if (parsed.protocol !== "https:" || !isScopedUrl(consoleUrl)) {
       throw new Error("not a console URL");
     }
