@@ -27,11 +27,22 @@ describe("serializeAx", () => {
   });
 
   it("prefers an explicit role attribute over the tag heuristic", () => {
-    const { document } = parseHTML(`<div role="tab">Overview</div>`);
+    const { document } = parseHTML(`<main><div role="tab">Overview</div></main>`);
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("div")!, refMap);
-    expect(tree.role).toBe("tab");
-    expect(tree.name).toBe("Overview");
+    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // Root is a RootWebArea wrapper; the tab is a (flattened) child.
+    expect(flatten(tree).some((s) => s.startsWith("tab:Overview:ref_"))).toBe(true);
+  });
+
+  it("computes a name-from-content for a multi-child heading", () => {
+    const { document } = parseHTML(
+      `<main><h1><span>HTTP</span> Load Balancers</h1></main>`,
+    );
+    const refMap = new Map<string, WeakRef<Element>>();
+    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // The heading claims the content name; the child span is presentational.
+    expect(flatten(tree).some((s) => s.startsWith("heading:HTTP Load Balancers:ref_"))).toBe(true);
+    expect(flatten(tree).filter((s) => s.includes("HTTP Load Balancers")).length).toBe(1);
   });
 
   it("maps common tags and prefers placeholder for names", () => {
