@@ -405,36 +405,26 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
-    // The XC Angular SPA dynamically re-registers its beforeunload dirty-form
-    // guard. A one-shot interceptor gets overridden. Permanently suppress it by
-    // overriding the addEventListener so no handler can set returnValue on
-    // beforeunload. This runs in MAIN world (same context as the Angular app).
+
+    // DEDUP: if the tab is already on the target URL, skip navigation entirely
+    // (avoids re-triggering OIDC on an already-valid session → no CSRF).
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func: () => {
-          // Already patched by a prior navigate — skip.
-          if ((window as any).__xcshBeforeunloadSuppressed) return;
-          (window as any).__xcshBeforeunloadSuppressed = true;
-          window.onbeforeunload = null;
-          // Override addEventListener to silently drop any beforeunload registrations.
-          const origAdd = EventTarget.prototype.addEventListener;
-          // @ts-ignore — overriding addEventListener to suppress beforeunload
-          EventTarget.prototype.addEventListener = function (type: string, ...args: unknown[]) {
-            if (type === "beforeunload") return;
-            return (origAdd as Function).apply(this, [type, ...args]);
-          };
-          // Also override the onbeforeunload setter so direct assignment is a no-op.
-          Object.defineProperty(window, "onbeforeunload", {
-            set() { /* no-op */ },
-            get() { return null; },
-            configurable: true,
-          });
-        },
-      });
-    } catch { /* page may not be scriptable (chrome:// etc) */ }
-    await chrome.tabs.update(tabId, { url, active: true });
+      const current = await chrome.tabs.get(tabId);
+      if (current.url && current.url.split("?")[0] === url.split("?")[0]) {
+        return { tabId };
+      }
+    } catch { /* tab may be closed — proceed to create */ }
+
+    // Use CDP Page.navigate (NOT chrome.tabs.update) — programmatic CDP
+    // navigations bypass the native beforeunload prompt entirely, so the
+    // "Leave site?" dialog never fires regardless of the form's dirty state.
+    try {
+      await ensureDebuggerAttached(tabId);
+      await chrome.debugger.sendCommand({ tabId }, "Page.navigate", { url });
+    } catch {
+      // Fallback: debugger may not attach on some pages (chrome://, etc.)
+      await chrome.tabs.update(tabId, { url, active: true });
+    }
   } else {
     const created = await chrome.tabs.create({ url, active: true });
     if (created.id === undefined) {
@@ -595,9 +585,12 @@ async function login(params: {
         onLoginForm = true;
         break;
       }
-    } else if (isScopedUrl(url)) {
+    } else if (isScopedUrl(url) && !url.includes("code=") && !url.includes("state=")) {
+      // Scoped URL without OIDC callback params → genuinely authenticated.
+      // (If ?code=&state= are present, the OIDC exchange is still in-flight.)
       steps.push("already authenticated — console loaded");
-      return { loggedIn: true, finalUrl: url, steps };
+      await waitForSettle(tabId);
+      return { loggedIn: true, finalUrl: (await chrome.tabs.get(tabId)).url ?? url, steps };
     }
     await sleep(800);
   }
@@ -855,19 +848,21 @@ async function click(params: {
 
 async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
-  // Page.captureScreenshot via chrome.debugger freezes the MV3 service worker's
-  // event loop on the heavy XC SPA — even a setTimeout race can't fire. Use
-  // chrome.tabs.captureVisibleTab instead (no debugger, no freeze). Requires
-  // <all_urls> host permission but the tools still enforce isScopedUrl.
   const tab = await chrome.tabs.get(tabId);
   await chrome.tabs.update(tabId, { active: true });
-  // Quality 20 keeps the retina-resolution JPEG under the ~1 MB native-messaging
-  // message limit (a 2x retina Mac at q60 can exceed it → Chrome silently drops).
+  // captureVisibleTab returns a data URL. On a retina Mac, even q20 can exceed
+  // the ~1MB native-messaging message limit. Capture at q10, check the size,
+  // and return a clear error if too large (never silently timeout).
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "jpeg",
-    quality: 20,
+    quality: 10,
   });
   const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+  if (data.length > 900_000) {
+    throw new Error(
+      `screenshot too large for native messaging: ${Math.round(data.length / 1024)}KB (retina display; max ~900KB)`,
+    );
+  }
   return { data, format: "jpeg" };
 }
 
