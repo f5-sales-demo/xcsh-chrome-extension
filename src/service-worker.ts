@@ -7,14 +7,6 @@
  */
 
 import {
-  clickRef,
-  formInputRef,
-  innerTextRef,
-  readAxTree,
-  scrollRef,
-  selectOptionRef,
-} from "./cdp-ax";
-import {
   matchNode,
   matchNodes,
   parseLocator,
@@ -714,10 +706,23 @@ function requireTab(): number {
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
 async function readAxFromTab(): Promise<AxNode> {
   const tabId = requireTab();
-  // Read the real CDP accessibility tree (parity with xcsh's catalogue, which
-  // was validated against Puppeteer accessibility.snapshot() = the same tree).
-  await ensureDebuggerAttached(tabId);
-  return (await readAxTree(tabId)) as unknown as AxNode;
+  // Read the AX tree via the in-page content script (fast). CDP
+  // Accessibility.getFullAXTree hangs on the heavy XC SPA, so — like the
+  // Anthropic extension — we build a proper, named AX tree in-page instead.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => (globalThis as { __xcshReadAx?: () => unknown }).__xcshReadAx?.() ?? null,
+      });
+      const tree = result[0]?.result;
+      if (tree && typeof tree === "object" && "role" in (tree as object)) return tree as AxNode;
+    } catch {
+      /* page still loading / navigating — retry */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("read_ax: content script not ready (page may still be loading)");
 }
 
 async function readAx(): Promise<unknown> {
@@ -758,10 +763,16 @@ async function assertText(params: {
   const tree = await readAxFromTab();
   const node = matchNode(tree, parseLocator(selector));
   // The matched AX node's accessible name often already contains the text;
-  // fall back to the element's innerText (via CDP) for a full check.
+  // fall back to the element's innerText (content script) for a full check.
   let text = (node.name as string) ?? "";
   if (!text.includes(expected) && node.ref) {
-    text = await innerTextRef(tabId, node.ref as string);
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (ref: string) =>
+        (globalThis as { __xcshGetInnerText?: (r: string) => string }).__xcshGetInnerText?.(ref) ?? "",
+      args: [node.ref as string],
+    });
+    text = (r?.result as string) ?? "";
   }
   if (!text.includes(expected)) {
     throw new Error(
@@ -792,25 +803,53 @@ async function click(params: {
   const tabId = requireTab();
   const ref = params?.ref;
   if (!ref) throw new Error("click: ref is required");
+  // Resolve the ref → viewport coords (content script), then dispatch a real
+  // mouse click via the debugger at those coords.
+  const resolved = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (r: string) =>
+      (globalThis as { __xcshResolveRef?: (r: string) => { x: number; y: number } | null }).__xcshResolveRef?.(r) ?? null,
+    args: [ref],
+  });
+  const coords = resolved[0]?.result as { x: number; y: number } | null;
+  if (!coords) throw new Error(`click: could not resolve ref: ${ref}`);
+  const { x, y } = coords;
   await ensureDebuggerAttached(tabId);
-  // Resolve the ref (CDP backendDOMNodeId) → coords → dispatch a real click.
-  const { x, y } = await clickRef(tabId, ref);
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1,
+  });
   return { clicked: ref, x, y };
 }
 
 async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
-  // Page.enable is required before captureScreenshot; JPEG q50 clipped to the
-  // viewport keeps the base64 under the ~1MB native-messaging message limit.
-  // (chrome.tabs.captureVisibleTab needs activeTab/<all_urls>, which we lack
-  // when driving programmatically — so use the debugger path instead.)
   await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
-  const result = (await chrome.debugger.sendCommand(
-    { tabId },
-    "Page.captureScreenshot",
-    { format: "jpeg", quality: 50, captureBeyondViewport: false },
-  )) as { data: string };
+  // Page.captureScreenshot can hang on the heavy XC SPA — race it with an 8s
+  // timeout so it fails fast instead of blocking the bridge for the full
+  // request timeout.
+  const shot = chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
+    format: "jpeg",
+    quality: 50,
+    captureBeyondViewport: false,
+  }) as Promise<{ data: string }>;
+  const result = (await Promise.race([
+    shot,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("screenshot: Page.captureScreenshot timed out (XC SPA)")), 8000),
+    ),
+  ])) as { data: string };
   return { data: result.data, format: "jpeg" };
 }
 
@@ -822,10 +861,16 @@ async function formInput(params: {
   const ref = params?.ref;
   const value = params?.value;
   if (!ref) throw new Error("form_input: ref is required");
-  await ensureDebuggerAttached(tabId);
-  // Resolve the ref (CDP backendDOMNodeId) → object handle → commitInputValue
-  // (native value setter + input/change/blur/focusout — vsui-input parity).
-  await formInputRef(tabId, ref, value ?? "");
+  // Commit the value via the content-script helper (vsui-input parity: native
+  // value setter + input/change/blur/focusout).
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (r: string, v: string) =>
+      (globalThis as { __xcshCommitInputValue?: (r: string, v: string) => void }).__xcshCommitInputValue?.(r, v),
+    args: [ref, value ?? ""],
+  });
+  const r0 = result[0] as { error?: { message?: string } } | undefined;
+  if (r0?.error) throw new Error(r0.error.message ?? `form_input failed for ref: ${ref}`);
   return { filled: ref, value };
 }
 
@@ -899,11 +944,13 @@ async function selectOption(params: {
   const tabId = requireTab();
   const { ref, value } = params;
   if (!ref) throw new Error("select_option: ref is required");
-  await ensureDebuggerAttached(tabId);
-  const ok = await selectOptionRef(tabId, ref, value);
-  if (!ok) {
-    throw new Error(`option "${value}" not found in select ${ref}`);
-  }
+  const [r] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (rr: string, vv: string) =>
+      (globalThis as { __xcshSelectOption?: (r: string, v: string) => boolean }).__xcshSelectOption?.(rr, vv),
+    args: [ref, value],
+  });
+  if (!r?.result) throw new Error(`option "${value}" not found in select ${ref}`);
   return { selected: value, ref };
 }
 
@@ -911,8 +958,11 @@ async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> 
   const tabId = requireTab();
   const { ref } = params;
   if (!ref) throw new Error("scroll_to: ref is required");
-  await ensureDebuggerAttached(tabId);
-  await scrollRef(tabId, ref);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (rr: string) => (globalThis as { __xcshScrollTo?: (r: string) => void }).__xcshScrollTo?.(rr),
+    args: [ref],
+  });
   return { scrolled: ref };
 }
 
