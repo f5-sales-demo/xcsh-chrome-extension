@@ -755,17 +755,18 @@ async function click(params: {
 
 async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
-  await ensureDebuggerAttached(tabId);
-  // Native messaging caps a single message at ~1 MB. A full-resolution PNG of
-  // the console easily exceeds that and silently stalls the bridge. Capture
-  // JPEG at reduced quality, clipped to the viewport, to stay well under the
-  // limit (mirrors the Anthropic extension's downscale-for-transport approach).
-  const result = (await chrome.debugger.sendCommand(
-    { tabId },
-    "Page.captureScreenshot",
-    { format: "jpeg", quality: 60, captureBeyondViewport: false },
-  )) as { data: string };
-  return { data: result.data, format: "jpeg" };
+  // Use chrome.tabs.captureVisibleTab (NOT chrome.debugger Page.captureScreenshot,
+  // which hangs on the XC SPA). It returns a JPEG data URL of the visible tab —
+  // no debugger needed, and JPEG q60 keeps the base64 under the ~1MB native-
+  // messaging message limit. The tab must be active in its window to be captured.
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.tabs.update(tabId, { active: true });
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+    format: "jpeg",
+    quality: 60,
+  });
+  const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+  return { data, format: "jpeg" };
 }
 
 async function formInput(params: {
@@ -885,11 +886,15 @@ async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> 
 
 async function getPageText(): Promise<{ text: string }> {
   const tabId = requireTab();
-  const [r] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => (globalThis as any).__xcshGetPageText(),
-  });
-  return { text: (r?.result as string) ?? "" };
+  // Use Runtime.evaluate via the debugger (MAIN world) — the content-script
+  // ISOLATED-world read returned empty on the XC SPA, but the MAIN-world
+  // document.body.innerText has the rendered text.
+  await ensureDebuggerAttached(tabId);
+  const result = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+    expression: "(document.body && document.body.innerText || '').slice(0, 50000)",
+    returnByValue: true,
+  })) as { result?: { value?: string } };
+  return { text: result?.result?.value ?? "" };
 }
 
 // --- JavaScript evaluation (domain-scoped) ---------------------------------
