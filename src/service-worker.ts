@@ -405,13 +405,11 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
-    // Attach + enable Page BEFORE navigating, so a "Leave site?" beforeunload
-    // dialog on the current (possibly dirty) form is auto-handled, not blocking.
-    try {
-      await ensureDebuggerAttached(tabId);
-    } catch {
-      /* current page may not be scoped — update will still proceed */
-    }
+    // Note: the chrome.debugger Page.javascriptDialogOpening auto-handler is
+    // registered globally — it'll accept any "Leave site?" dialog IF the
+    // debugger is attached. We do NOT attach here (it can freeze the SW on a
+    // heavy page); the dialog auto-handler fires when the debugger is next
+    // attached by a tool that needs it.
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
     const created = await chrome.tabs.create({ url, active: true });
@@ -445,13 +443,15 @@ async function recoverFromCsrf(tabId: number): Promise<void> {
   for (let attempt = 0; attempt < 2; attempt++) {
     let isCsrf = false;
     try {
-      await ensureDebuggerAttached(tabId);
-      const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
-        expression:
-          "/invalid csrf token|csrf token/i.test((document.body && document.body.innerText || '').slice(0, 500))",
-        returnByValue: true,
-      })) as { result?: { value?: boolean } };
-      isCsrf = r?.result?.value === true;
+      // Use executeScript (no debugger — debugger can freeze the SW on this page).
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () =>
+          /invalid csrf token|csrf token/i.test(
+            ((document.body && document.body.innerText) || "").slice(0, 500),
+          ),
+      });
+      isCsrf = r?.result === true;
     } catch {
       return; // mid-navigation — let the caller's settle handle it
     }
@@ -468,22 +468,19 @@ async function recoverFromCsrf(tabId: number): Promise<void> {
  * is what makes navigate → read_ax deterministic on the SPA.
  */
 async function waitForSettle(tabId: number, timeoutMs = 15_000): Promise<void> {
-  try {
-    await ensureDebuggerAttached(tabId);
-  } catch {
-    return; // can't attach (e.g. mid-redirect) — skip settle, caller still works
-  }
+  // Use executeScript (NOT chrome.debugger — the debugger can freeze the MV3 SW
+  // on the heavy XC SPA) to poll the DOM element count until it stabilizes.
   let last = -1;
   let stable = 0;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && stable < 3) {
     let count = 0;
     try {
-      const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
-        expression: "document.querySelectorAll('*').length",
-        returnByValue: true,
-      })) as { result?: { value?: number } };
-      count = r?.result?.value ?? 0;
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => document.querySelectorAll("*").length,
+      });
+      count = (r?.result as number) ?? 0;
     } catch {
       /* navigation in progress — retry */
     }
