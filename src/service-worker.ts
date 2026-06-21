@@ -834,31 +834,18 @@ async function click(params: {
 
 async function screenshot(): Promise<{ data: string; format: string }> {
   const tabId = requireTab();
-  await ensureDebuggerAttached(tabId);
-  await chrome.debugger.sendCommand({ tabId }, "Page.enable", {});
-  // Page.captureScreenshot can hang on the heavy XC SPA. fromSurface:false
-  // captures from the renderer (avoids the GPU-surface hang); race an 8s
-  // timeout, and on timeout DETACH so the pending command doesn't wedge the
-  // debugger session for the next tool.
-  const shot = chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", {
+  // Page.captureScreenshot via chrome.debugger freezes the MV3 service worker's
+  // event loop on the heavy XC SPA — even a setTimeout race can't fire. Use
+  // chrome.tabs.captureVisibleTab instead (no debugger, no freeze). Requires
+  // <all_urls> host permission but the tools still enforce isScopedUrl.
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.tabs.update(tabId, { active: true });
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "jpeg",
-    quality: 50,
-    captureBeyondViewport: false,
-  }) as Promise<{ data: string }>;
-  try {
-    const result = (await Promise.race([
-      shot,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("screenshot: timed out (XC SPA)")), 8000),
-      ),
-    ])) as { data: string };
-    return { data: result.data, format: "jpeg" };
-  } catch (e) {
-    // Clear the (possibly wedged) debugger session so the next tool re-attaches clean.
-    await chrome.debugger.detach({ tabId }).catch(() => {});
-    attachedTabs.delete(tabId);
-    throw e;
-  }
+    quality: 60,
+  });
+  const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+  return { data, format: "jpeg" };
 }
 
 async function formInput(params: {
