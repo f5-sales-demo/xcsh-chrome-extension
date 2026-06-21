@@ -413,6 +413,13 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   if (reuseId !== undefined) {
     targetTabId = reuseId;
     tabId = reuseId;
+    // Attach + enable Page BEFORE navigating, so a "Leave site?" beforeunload
+    // dialog on the current (possibly dirty) form is auto-handled, not blocking.
+    try {
+      await ensureDebuggerAttached(tabId);
+    } catch {
+      /* current page may not be scoped — update will still proceed */
+    }
     await chrome.tabs.update(tabId, { url, active: true });
   } else {
     const created = await chrome.tabs.create({ url, active: true });
