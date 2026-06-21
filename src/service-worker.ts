@@ -142,7 +142,17 @@ async function enableNetworkObserver(): Promise<void> {
 
 // Push CDP events for the target tab into the diagnostic ring buffers.
 chrome.debugger.onEvent.addListener((source, method, eventParams) => {
-  if (source.tabId === undefined || source.tabId !== targetTabId) return;
+  if (source.tabId === undefined) return;
+  // Auto-handle native JS dialogs (beforeunload "Leave site?", alert, confirm)
+  // so they never block the page / freeze the debugger — automation flows
+  // naturally without popups. Accept so navigation proceeds.
+  if (method === "Page.javascriptDialogOpening") {
+    chrome.debugger
+      .sendCommand({ tabId: source.tabId }, "Page.handleJavaScriptDialog", { accept: true })
+      .catch(() => {});
+    return;
+  }
+  if (source.tabId !== targetTabId) return;
   if (method === "Runtime.consoleAPICalled") {
     consoleBuffer.push(eventParams);
     if (consoleBuffer.length > 500) consoleBuffer.shift();
@@ -1103,10 +1113,12 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
     // handled upstream by the bridge's request timeout, not here.
     throw new Error(
       `chrome.debugger.attach failed for tab ${tabId}: ${e?.message ?? e}. ` +
-        `If Chrome shows a "debugging started" bar, click "Cancel" to ` +
-        `dismiss it — xcsh will retry.`,
+        `If Chrome shows a "debugging started" bar, leave it — xcsh will retry.`,
     );
   }
+  // Enable Page so javascriptDialogOpening events fire and we can auto-handle
+  // native "Leave site?"/alert/confirm dialogs (they would otherwise block).
+  await chrome.debugger.sendCommand({ tabId }, "Page.enable", {}).catch(() => {});
 }
 
 // Keep `attachedTabs` consistent if the debugger detaches out-of-band
