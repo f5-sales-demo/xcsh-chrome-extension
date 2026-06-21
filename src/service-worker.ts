@@ -276,6 +276,9 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
     case "navigate":
       return navigate(params);
 
+    case "login":
+      return login(params);
+
     case "select_option":
       return selectOption(params);
 
@@ -406,6 +409,163 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   }
 
   return { tabId };
+}
+
+/**
+ * Native F5 XC login — drives the OIDC/Keycloak flow end-to-end.
+ *
+ * The XC console is OIDC-protected: visiting it 302-redirects to a Keycloak
+ * realm login page, the user authenticates, Keycloak 302-redirects back with an
+ * authorization code, and the console exchanges it for a session. This tool
+ * navigates to the console, fills + submits the Keycloak form, handles the
+ * optional `login-actions/required-action` interstitial, and waits until the
+ * browser is back on a console (non-login) URL. Each stage is recorded in
+ * `steps` so the AI engine (xcsh) has a systematic map of the redirect flow.
+ *
+ * Credentials are used in-memory only (passed per call from xcsh); they are
+ * never persisted by the extension.
+ */
+async function login(params: {
+  email: string;
+  password: string;
+  consoleUrl: string;
+}): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
+  const { email, password, consoleUrl } = params ?? ({} as any);
+  if (!email || !password || !consoleUrl) {
+    throw new Error("login: email, password, and consoleUrl are required");
+  }
+  const steps: string[] = [];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const isLoginUrl = (u: string) =>
+    /login[^.]*\.volterra\.us|\/auth\/realms\/|\/login-actions\//.test(u);
+
+  // 1) Navigate to the console — 302s to Keycloak (or loads if already authed).
+  const { tabId } = await navigate({ url: consoleUrl });
+  steps.push(`navigate → ${consoleUrl}`);
+
+  // 2) Detect whether we're on the Keycloak login form or already on the console.
+  const detectDeadline = Date.now() + 30_000;
+  let onLoginForm = false;
+  while (Date.now() < detectDeadline) {
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url ?? "";
+    if (isLoginUrl(url)) {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({
+          form: !!document.querySelector("#username, #password"),
+          invalid: /invalid username or password/i.test(
+            document.body?.innerText ?? "",
+          ),
+          href: location.href,
+        }),
+      });
+      const res = r?.result as { form?: boolean; invalid?: boolean } | undefined;
+      if (res?.form) {
+        steps.push(`302 → Keycloak login page (${new URL(url).hostname})`);
+        onLoginForm = true;
+        break;
+      }
+    } else if (isScopedUrl(url)) {
+      steps.push("already authenticated — console loaded");
+      return { loggedIn: true, finalUrl: url, steps };
+    }
+    await sleep(800);
+  }
+  if (!onLoginForm) {
+    throw new Error("login: Keycloak login form did not appear within 30s");
+  }
+
+  // 3) Fill + submit the Keycloak credentials form.
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (em: string, pw: string) => {
+      const u = document.querySelector("#username, input[name='username']") as
+        | HTMLInputElement
+        | null;
+      const p = document.querySelector("#password, input[name='password']") as
+        | HTMLInputElement
+        | null;
+      if (u) {
+        u.value = em;
+        u.dispatchEvent(new Event("input", { bubbles: true }));
+        u.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      if (p) {
+        p.value = pw;
+        p.dispatchEvent(new Event("input", { bubbles: true }));
+        p.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const btn = document.querySelector(
+        "#kc-login, button[type='submit'], input[type='submit']",
+      ) as HTMLElement | null;
+      btn?.click();
+    },
+    args: [email, password],
+  });
+  steps.push("submitted credentials → #kc-login");
+
+  // 4) Wait for the redirect back to the console, handling the required-action
+  //    interstitial (e.g. UPDATE_PROFILE) and detecting invalid credentials.
+  const authDeadline = Date.now() + 40_000;
+  while (Date.now() < authDeadline) {
+    await sleep(1000);
+    const tab = await chrome.tabs.get(tabId);
+    const url = tab.url ?? "";
+
+    if (isScopedUrl(url) && !isLoginUrl(url)) {
+      steps.push(`302 → console (${new URL(url).hostname}) — authenticated`);
+      // Re-inject the content script onto the freshly-loaded console page.
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          files: ["accessibility-tree.js"],
+        });
+      } catch {
+        /* manifest may have injected already */
+      }
+      return { loggedIn: true, finalUrl: url, steps };
+    }
+
+    // Still on a Keycloak page — check for an error or a required-action form.
+    if (isLoginUrl(url)) {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const invalid =
+            /invalid username or password|account is disabled/i.test(
+              document.body?.innerText ?? "",
+            );
+          if (invalid) return "invalid";
+          // A required-action interstitial (update profile / terms) — its
+          // primary submit advances the flow. Only click if no error is shown.
+          const submit = document.querySelector(
+            "input[type='submit'], button[type='submit'], #kc-login",
+          ) as HTMLElement | null;
+          const isInterstitial = /required-action|login-actions\/(authenticate|action-token)/.test(
+            location.pathname,
+          );
+          if (isInterstitial && submit) {
+            submit.click();
+            return "interstitial-submitted";
+          }
+          return "waiting";
+        },
+      });
+      const state = r?.result as string | undefined;
+      if (state === "invalid") {
+        throw new Error("login: invalid username or password");
+      }
+      if (state === "interstitial-submitted") {
+        steps.push("handled Keycloak required-action interstitial");
+      }
+    }
+  }
+
+  const finalTab = await chrome.tabs.get(tabId);
+  throw new Error(
+    `login: did not reach the console within 40s (stuck on ${finalTab.url?.slice(0, 70)})`,
+  );
 }
 
 function waitForNavigation(tabId: number): Promise<void> {
