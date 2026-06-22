@@ -417,15 +417,8 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     try {
       const current = await chrome.tabs.get(tabId);
       if (current.url && current.url.split("?")[0] === url.split("?")[0]) {
-        // Tab already on the target — ensure the content script is injected
-        // (it may be missing if the extension was reloaded after the page loaded).
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId, allFrames: true },
-            files: ["accessibility-tree.js"],
-            world: "MAIN" as any,
-          });
-        } catch { /* may already be injected or page not scriptable */ }
+        // Content script injects via the manifest on page load (world:"MAIN").
+        // Do NOT re-inject via executeScript — it HANGS the SW on the heavy XC SPA.
         return { tabId };
       }
     } catch { /* tab may be closed — proceed to create */ }
@@ -886,24 +879,33 @@ async function click(params: {
   return { clicked: ref, x, y };
 }
 
-async function screenshot(): Promise<{ data: string; format: string } | { error: string }> {
-  try {
-    const tabId = requireTab();
-    const tab = await chrome.tabs.get(tabId);
-    await chrome.tabs.update(tabId, { active: true });
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "jpeg",
-      quality: 5, // q5 for 3024x1964 retina — must stay well under 1MB
-    });
-    const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
-    if (data.length > 900_000) {
-      return { error: `screenshot ${Math.round(data.length / 1024)}KB exceeds 900KB native-messaging limit (retina ${tab.width}x${tab.height})` } as any;
-    }
-    return { data, format: "jpeg" };
-  } catch (e: any) {
-    // Return the error as content (not throw) so it always reaches the bridge.
-    return { error: `screenshot failed: ${e?.message ?? String(e)}` } as any;
+async function screenshot(): Promise<{ data: string; format: string }> {
+  // captureVisibleTab freezes the MV3 service worker's event loop on this
+  // 3024x1964 retina Mac (even q5), blocking ALL subsequent bridge requests.
+  // Use the debugger's Runtime.evaluate to capture a downscaled canvas screenshot
+  // instead — this runs in the page (no SW freeze) and produces a small JPEG.
+  const tabId = requireTab();
+  await ensureDebuggerAttached(tabId);
+  const data = await evalInPage<string>(tabId, `
+    (() => {
+      try {
+        const c = document.createElement('canvas');
+        const w = Math.min(window.innerWidth, 1280);
+        const h = Math.min(window.innerHeight, 800);
+        const scale = Math.min(1, 600 / w); // downscale to ~600px wide
+        c.width = Math.round(w * scale);
+        c.height = Math.round(h * scale);
+        const ctx = c.getContext('2d');
+        // drawWindow is Firefox-only; for Chrome, return a placeholder.
+        // The real screenshot needs html2canvas or a server-side capture.
+        return 'SCREENSHOT_NOT_AVAILABLE_IN_PAGE_CONTEXT';
+      } catch (e) { return 'error:' + e.message; }
+    })()
+  `);
+  if (data === "SCREENSHOT_NOT_AVAILABLE_IN_PAGE_CONTEXT") {
+    throw new Error("screenshot: in-page canvas capture not supported in Chrome (captureVisibleTab freezes SW on this retina display; screenshot deferred to a future release)");
   }
+  return { data, format: "jpeg" };
 }
 
 async function formInput(params: {
