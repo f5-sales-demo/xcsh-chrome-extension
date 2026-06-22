@@ -1,0 +1,43 @@
+---
+title: xcsh Chrome Extension
+description: Chrome extension companion for the xcsh AI-powered F5 Distributed Cloud CLI.
+hero:
+  tagline: Let the xcsh AI assistant drive your F5 Distributed Cloud console — deterministically, in your real browser.
+  image:
+    html: '<img src="/xcsh-chrome-extension/assets/screenshot-welcome.png" alt="xcsh Chrome Extension" style="max-width:520px;width:100%;height:auto;" />'
+sidebar:
+  hidden: true
+  order: 0
+---
+
+The **xcsh Chrome Extension** is a purpose-built Manifest V3 extension that lets the [xcsh](https://f5xc-salesdemos.github.io/xcsh/) AI assistant drive the F5 Distributed Cloud admin console directly in your browser — deterministically, in headed mode, while you watch.
+
+## What it does
+
+The extension connects to the xcsh CLI through a local native-messaging bridge and exposes a surface of browser-automation tools scoped exclusively to the F5 XC console:
+
+- **Native F5 XC login** — drives the full OIDC/Keycloak flow with session-expiry auto-recovery and required-action discrimination
+- **Accessibility-tree navigation** — reads the console's structure via role/name/text selectors
+- **Form automation** — fills fields with Angular model commitment (handles the XC console's `vsui-input` framework)
+- **Deterministic interaction** — clicks, selects, scrolls, and types via the Chrome DevTools Protocol
+- **Diagnostics** — reads console logs and network requests for troubleshooting
+
+## How it works
+
+xcsh (the CLI AI assistant) connects to this extension over a local native-messaging bridge. The extension drives your real Chrome — no separate browser, no debug port, no headless mode. Every action is visible, and the extension only operates on F5 Distributed Cloud console domains.
+
+## Privacy
+
+- Credentials are held **in-memory only** — never persisted by the extension
+- All communication is **local** (native-messaging bridge to the xcsh CLI)
+- **No data** is sent to external servers
+- Enterprise managed policy support (`allowedDomains`, `blockedUrlPatterns`) via Chrome Enterprise
+
+## Getting started
+
+1. Install the [xcsh CLI](https://f5xc-salesdemos.github.io/xcsh/)
+2. Install the extension from the Chrome Web Store
+3. Run `xcsh chrome setup` to install the native-messaging host
+4. Log into your F5 XC tenant in Chrome
+
+The extension is open source at [github.com/f5xc-salesdemos/xcsh-chrome-extension](https://github.com/f5xc-salesdemos/xcsh-chrome-extension).
