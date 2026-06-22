@@ -98,6 +98,11 @@ let port: chrome.runtime.Port | null = null;
 // The console tab the SW is currently driving (set in `navigate`).
 let targetTabId: number | undefined;
 
+// Cached login credentials for session-expiry auto-recovery. Set by login(),
+// used by navigate() to transparently re-authenticate when the session expires.
+// In-memory only — never persisted.
+let lastLoginCredentials: { email: string; password: string; consoleUrl: string } | null = null;
+
 // Tabs we have attached the debugger to, so we can detach on cleanup and avoid
 // re-attaching needlessly.
 const attachedTabs = new Set<number>();
@@ -461,16 +466,22 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // to settle so read_ax/find see the real content, not the loading shell.
   await waitForSettle(tabId);
 
-  // Ensure the content script is injected in the MAIN world after any navigation.
-  // (world:"MAIN" puts __xcshReadAx on the page's globalThis where Runtime.evaluate
-  // can see it — critical for the evalInPage-based tools.)
+  // Session-expiry auto-recovery: if the page redirected to Keycloak login
+  // (session expired), and we have stored credentials, re-login automatically.
+  // This makes session expiry invisible to the agent.
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ["accessibility-tree.js"],
-      world: "MAIN" as any,
-    });
-  } catch { /* already injected or page not scriptable */ }
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url && isLoginUrl(tab.url)) {
+      // The session expired — re-login if we have credentials from the last login call.
+      if (lastLoginCredentials) {
+        await login(lastLoginCredentials);
+        // Re-navigate to the original target after re-authentication.
+        await chrome.debugger.sendCommand({ tabId }, "Page.navigate", { url });
+        await waitForNavigation(tabId);
+        await waitForSettle(tabId);
+      }
+    }
+  } catch { /* best-effort recovery */ }
 
   return { tabId };
 }
@@ -554,6 +565,8 @@ async function login(params: {
   if (!email || !password || !consoleUrl) {
     throw new Error("login: email, password, and consoleUrl are required");
   }
+  // Cache creds for session-expiry auto-recovery (in-memory only, never persisted).
+  lastLoginCredentials = { email, password, consoleUrl };
   // Only the console domain is a valid login target — reject anything else so
   // credentials can never be navigated to / injected into a foreign host.
   try {
@@ -678,24 +691,54 @@ async function login(params: {
               document.body?.innerText ?? "",
             );
           if (invalid) return "invalid";
-          // A required-action interstitial (update profile / terms) — its
-          // primary submit advances the flow. Only click if no error is shown.
-          const submit = document.querySelector(
-            "input[type='submit'], button[type='submit'], #kc-login",
-          ) as HTMLElement | null;
+          // Required-action discrimination: read the execution= type and handle
+          // each differently. Safe actions auto-submit; dangerous ones throw clear errors.
           const isInterstitial = /required-action|login-actions\/(authenticate|action-token)/.test(
             location.pathname,
           );
-          if (isInterstitial && submit) {
+          if (!isInterstitial) return "waiting";
+
+          // Detect MFA / TOTP prompt
+          const hasOtp = !!document.querySelector("#otp, input[name='totp'], input[name='otp']");
+          if (hasOtp) return "mfa-required";
+
+          // Read the execution= parameter to determine the action type
+          const execParam = new URLSearchParams(location.search).get("execution") ?? "";
+          const execType = execParam.toUpperCase();
+
+          // Password change / email verify require user input — can't auto-submit
+          if (execType.includes("PASSWORD")) return "password-change-required";
+          if (execType.includes("VERIFY_EMAIL")) return "email-verification-required";
+          if (execType.includes("CONFIGURE_TOTP")) return "totp-setup-required";
+
+          // UPDATE_PROFILE and other safe actions — auto-submit
+          const submit = document.querySelector(
+            "input[type='submit'], button[type='submit'], #kc-login",
+          ) as HTMLElement | null;
+          if (submit) {
             submit.click();
-            return "interstitial-submitted";
+            return "interstitial-submitted:" + execType;
           }
           return "waiting";
         },
       });
-      const state = r?.result as string | undefined;
+      const state = (r?.result as string) ?? "";
       if (state === "invalid") {
         throw new Error("login: invalid username or password");
+      }
+      if (state === "mfa-required") {
+        throw new Error(
+          "login: MFA TOTP code required — either set F5XC_TOTP_SECRET in your xcsh context or complete the 2FA prompt in the visible Chrome window",
+        );
+      }
+      if (state === "password-change-required") {
+        throw new Error("login: password change required — update your password in the visible Chrome window, then retry");
+      }
+      if (state === "email-verification-required") {
+        throw new Error("login: email verification required — check your email, then retry");
+      }
+      if (state === "totp-setup-required") {
+        throw new Error("login: MFA TOTP setup required — complete the setup in the visible Chrome window, then retry");
       }
       if (state === "interstitial-submitted") {
         steps.push("handled Keycloak required-action interstitial");
