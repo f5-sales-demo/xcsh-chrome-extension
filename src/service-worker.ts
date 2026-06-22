@@ -771,6 +771,17 @@ async function readAxFromTab(): Promise<AxNode> {
   // First: inject the serializeAx code via Runtime.evaluate if __xcshReadAx
   // isn't available (content script may not have injected on this page load).
   await ensureDebuggerAttached(tabId);
+  // If __xcshReadAx isn't defined (extension reloaded / content script not yet
+  // injected on this page), inject it inline via Runtime.evaluate. This is the
+  // same IIFE the manifest's content_scripts would inject on a new page load.
+  const isAvailable = await evalInPage<boolean>(tabId, "typeof __xcshReadAx === 'function'");
+  if (!isAvailable) {
+    // Fetch the built content script and inject it via the debugger (Runtime.evaluate).
+    // fetch() works in the SW context against the extension's own files.
+    const code = await (await fetch(chrome.runtime.getURL("accessibility-tree.js"))).text();
+    await evalInPage<void>(tabId, code);
+  }
+
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
