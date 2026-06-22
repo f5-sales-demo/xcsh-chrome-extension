@@ -91,6 +91,15 @@ function isScopedUrl(url: string): boolean {
   );
 }
 
+/** Hostname-anchored Keycloak login URL check. */
+const KC_LOGIN_HOST = /(?:^|\.)volterra\.us$|(?:^|\.)console\.ves\.volterra\.io$/;
+function isKeycloakLoginUrl(u: string): boolean {
+  try {
+    const { hostname, pathname } = new URL(u);
+    return KC_LOGIN_HOST.test(hostname) && /\/auth\/realms\/|\/login-actions\//.test(pathname);
+  } catch { return false; }
+}
+
 // --- Native-messaging connection + lifecycle -------------------------------
 
 let port: chrome.runtime.Port | null = null;
@@ -466,20 +475,19 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   // to settle so read_ax/find see the real content, not the loading shell.
   await waitForSettle(tabId);
 
-  // Session-expiry auto-recovery: if the page redirected to Keycloak login
-  // (session expired), and we have stored credentials, re-login automatically.
-  // This makes session expiry invisible to the agent.
+  // Session-expiry auto-recovery
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (tab.url && isLoginUrl(tab.url)) {
-      // The session expired — re-login if we have credentials from the last login call.
-      if (lastLoginCredentials) {
-        await login(lastLoginCredentials);
-        // Re-navigate to the original target after re-authentication.
+    if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials) {
+      await login(lastLoginCredentials);
+      try {
+        await ensureDebuggerAttached(tabId);
         await chrome.debugger.sendCommand({ tabId }, "Page.navigate", { url });
-        await waitForNavigation(tabId);
-        await waitForSettle(tabId);
+      } catch {
+        await chrome.tabs.update(tabId, { url, active: true });
       }
+      await waitForNavigation(tabId);
+      await waitForSettle(tabId);
     }
   } catch { /* best-effort recovery */ }
 
@@ -580,22 +588,10 @@ async function login(params: {
 
   const steps: string[] = [];
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // A Keycloak login page is hosted on a *.volterra.us host AND has an
-  // auth/login-actions path. Hostname-anchored so credentials are only ever
-  // injected into the genuine Keycloak/console domains, never a foreign host
-  // that merely contains "/auth/realms/" in its path.
-  const KC_HOST = /(?:^|\.)volterra\.us$|(?:^|\.)console\.ves\.volterra\.io$/;
-  const isLoginUrl = (u: string) => {
-    try {
-      const { hostname, pathname } = new URL(u);
-      return (
-        KC_HOST.test(hostname) &&
-        /\/auth\/realms\/|\/login-actions\//.test(pathname)
-      );
-    } catch {
-      return false;
-    }
-  };
+  // Use the module-scoped Keycloak login URL check (hostname-anchored) so
+  // credentials are only ever injected into the genuine Keycloak/console
+  // domains, never a foreign host that merely contains "/auth/realms/".
+  const isLoginUrl = isKeycloakLoginUrl;
 
   // 1) Navigate to the console — 302s to Keycloak (or loads if already authed).
   const { tabId } = await navigate({ url: consoleUrl });
@@ -740,8 +736,8 @@ async function login(params: {
       if (state === "totp-setup-required") {
         throw new Error("login: MFA TOTP setup required — complete the setup in the visible Chrome window, then retry");
       }
-      if (state === "interstitial-submitted") {
-        steps.push("handled Keycloak required-action interstitial");
+      if (state.startsWith("interstitial-submitted")) {
+        steps.push(`handled Keycloak required-action interstitial (${state.split(":")[1] ?? ""})`);
       }
     }
   }
