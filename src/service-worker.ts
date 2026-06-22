@@ -284,13 +284,9 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
       return { ok: true, version: VERSION };
 
     case "debug_exec": {
-      // Diagnostic: trivial executeScript to test if chrome.scripting works at all.
+      // Diagnostic: test if __xcshReadAx is available via the debugger path.
       const tabId = requireTab();
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => ({ ts: Date.now(), title: document.title, xcsh: typeof (globalThis as any).__xcshReadAx }),
-      });
-      return r?.result ?? null;
+      return evalInPage(tabId, "({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})");
     }
 
     case "navigate":
@@ -727,26 +723,51 @@ function requireTab(): number {
   return targetTabId;
 }
 
+/**
+ * Evaluate a JS expression in the page's MAIN world via chrome.debugger
+ * Runtime.evaluate. This is the ONLY reliable way to reach the content-script's
+ * __xcsh* globals on the heavy XC SPA — chrome.scripting.executeScript hangs
+ * (30s+) while Runtime.evaluate returns in <20ms on the same page.
+ */
+async function evalInPage<T>(tabId: number, expression: string): Promise<T> {
+  await ensureDebuggerAttached(tabId);
+  const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    awaitPromise: false,
+  })) as { result?: { value?: T }; exceptionDetails?: { text?: string } };
+  if (r.exceptionDetails) {
+    throw new Error(`evalInPage error: ${r.exceptionDetails.text ?? "unknown"}`);
+  }
+  return r.result?.value as T;
+}
+
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
 async function readAxFromTab(): Promise<AxNode> {
   const tabId = requireTab();
-  // Read the AX tree via the in-page content script (fast). CDP
-  // Accessibility.getFullAXTree hangs on the heavy XC SPA, so — like the
-  // Anthropic extension — we build a proper, named AX tree in-page instead.
+  // chrome.scripting.executeScript HANGS on the heavy XC SPA (confirmed: 30s+
+  // timeout while chrome.debugger Runtime.evaluate returns in 13ms on the same
+  // page). Route ALL page reads through the debugger instead.
+  // First: inject the serializeAx code via Runtime.evaluate if __xcshReadAx
+  // isn't available (content script may not have injected on this page load).
+  await ensureDebuggerAttached(tabId);
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
-      const result = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => (globalThis as { __xcshReadAx?: () => unknown }).__xcshReadAx?.() ?? null,
-      });
-      const tree = result[0]?.result;
-      if (tree && typeof tree === "object" && "role" in (tree as object)) return tree as AxNode;
+      const r = (await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", {
+        expression: "typeof __xcshReadAx === 'function' ? JSON.stringify(__xcshReadAx()) : null",
+        returnByValue: true,
+      })) as { result?: { value?: string | null } };
+      const json = r?.result?.value;
+      if (json) {
+        const tree = JSON.parse(json);
+        if (tree && typeof tree === "object" && "role" in (tree as object)) return tree as AxNode;
+      }
     } catch {
       /* page still loading / navigating — retry */
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error("read_ax: content script not ready (page may still be loading)");
+  throw new Error("read_ax: __xcshReadAx not available via debugger (page may still be loading)");
 }
 
 async function readAx(): Promise<unknown> {
@@ -790,13 +811,7 @@ async function assertText(params: {
   // fall back to the element's innerText (content script) for a full check.
   let text = (node.name as string) ?? "";
   if (!text.includes(expected) && node.ref) {
-    const [r] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (ref: string) =>
-        (globalThis as { __xcshGetInnerText?: (r: string) => string }).__xcshGetInnerText?.(ref) ?? "",
-      args: [node.ref as string],
-    });
-    text = (r?.result as string) ?? "";
+    text = await evalInPage<string>(tabId, `typeof __xcshGetInnerText==='function'?__xcshGetInnerText(${JSON.stringify(node.ref)}):''`);
   }
   if (!text.includes(expected)) {
     throw new Error(
@@ -827,18 +842,13 @@ async function click(params: {
   const tabId = requireTab();
   const ref = params?.ref;
   if (!ref) throw new Error("click: ref is required");
-  // Resolve the ref → viewport coords (content script), then dispatch a real
-  // mouse click via the debugger at those coords.
-  const resolved = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (r: string) =>
-      (globalThis as { __xcshResolveRef?: (r: string) => { x: number; y: number } | null }).__xcshResolveRef?.(r) ?? null,
-    args: [ref],
-  });
-  const coords = resolved[0]?.result as { x: number; y: number } | null;
+  // Resolve the ref → viewport coords via the debugger (executeScript hangs on XC SPA).
+  const coords = await evalInPage<{ x: number; y: number } | null>(
+    tabId,
+    `typeof __xcshResolveRef === 'function' ? __xcshResolveRef(${JSON.stringify(ref)}) : null`,
+  );
   if (!coords) throw new Error(`click: could not resolve ref: ${ref}`);
   const { x, y } = coords;
-  await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
     type: "mousePressed",
     x,
@@ -884,16 +894,8 @@ async function formInput(params: {
   const ref = params?.ref;
   const value = params?.value;
   if (!ref) throw new Error("form_input: ref is required");
-  // Commit the value via the content-script helper (vsui-input parity: native
-  // value setter + input/change/blur/focusout).
-  const result = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (r: string, v: string) =>
-      (globalThis as { __xcshCommitInputValue?: (r: string, v: string) => void }).__xcshCommitInputValue?.(r, v),
-    args: [ref, value ?? ""],
-  });
-  const r0 = result[0] as { error?: { message?: string } } | undefined;
-  if (r0?.error) throw new Error(r0.error.message ?? `form_input failed for ref: ${ref}`);
+  // Commit the value via the debugger (executeScript hangs on the XC SPA).
+  await evalInPage<void>(tabId, `__xcshCommitInputValue(${JSON.stringify(ref)}, ${JSON.stringify(value ?? "")})`);
   return { filled: ref, value };
 }
 
@@ -967,13 +969,8 @@ async function selectOption(params: {
   const tabId = requireTab();
   const { ref, value } = params;
   if (!ref) throw new Error("select_option: ref is required");
-  const [r] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (rr: string, vv: string) =>
-      (globalThis as { __xcshSelectOption?: (r: string, v: string) => boolean }).__xcshSelectOption?.(rr, vv),
-    args: [ref, value],
-  });
-  if (!r?.result) throw new Error(`option "${value}" not found in select ${ref}`);
+  const ok = await evalInPage<boolean>(tabId, `typeof __xcshSelectOption==='function'?__xcshSelectOption(${JSON.stringify(ref)},${JSON.stringify(value)}):false`);
+  if (!ok) throw new Error(`option "${value}" not found in select ${ref}`);
   return { selected: value, ref };
 }
 
@@ -981,11 +978,7 @@ async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> 
   const tabId = requireTab();
   const { ref } = params;
   if (!ref) throw new Error("scroll_to: ref is required");
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (rr: string) => (globalThis as { __xcshScrollTo?: (r: string) => void }).__xcshScrollTo?.(rr),
-    args: [ref],
-  });
+  await evalInPage<void>(tabId, `typeof __xcshScrollTo==='function'&&__xcshScrollTo(${JSON.stringify(ref)})`);
   return { scrolled: ref };
 }
 
