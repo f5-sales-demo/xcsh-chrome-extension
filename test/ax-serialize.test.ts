@@ -1,7 +1,7 @@
-import { describe, expect, it } from "bun:test";
-import { parseHTML } from "linkedom";
-import { commitInputValue } from "../src/accessibility-tree";
-import { serializeAx, type AxRefNode } from "../src/ax-serialize";
+import { describe, expect, it } from 'bun:test';
+import { parseHTML } from 'linkedom';
+import { commitInputValue } from '../src/accessibility-tree';
+import { type AxRefNode, serializeAx } from '../src/ax-serialize';
 
 function flatten(tree: AxRefNode): string[] {
   const out: string[] = [];
@@ -12,73 +12,74 @@ function flatten(tree: AxRefNode): string[] {
   return out;
 }
 
-describe("serializeAx", () => {
-  it("serializes roles+names with stable refs and populates the refMap", () => {
-    const { document } = parseHTML(
-      `<main><button>Save</button><input type="text" aria-label="Name"></main>`,
-    );
+describe('serializeAx', () => {
+  it('serializes roles+names with stable refs and populates the refMap', () => {
+    const { document } = parseHTML(`<main><button>Save</button><input type="text" aria-label="Name"></main>`);
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // biome-ignore lint/style/noNonNullAssertion: test fixture
+    const tree = serializeAx(document.querySelector('main')!, refMap);
     const flat = flatten(tree);
 
-    expect(flat.some((s) => s.startsWith("button:Save:ref_"))).toBe(true);
-    expect(flat.some((s) => s.startsWith("textbox:Name:ref_"))).toBe(true);
+    expect(flat.some((s) => s.startsWith('button:Save:ref_'))).toBe(true);
+    expect(flat.some((s) => s.startsWith('textbox:Name:ref_'))).toBe(true);
     expect(refMap.size).toBeGreaterThan(0);
   });
 
-  it("prefers an explicit role attribute over the tag heuristic", () => {
+  it('prefers an explicit role attribute over the tag heuristic', () => {
     const { document } = parseHTML(`<main><div role="tab">Overview</div></main>`);
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // biome-ignore lint/style/noNonNullAssertion: test fixture
+    const tree = serializeAx(document.querySelector('main')!, refMap);
     // Root is a RootWebArea wrapper; the tab is a (flattened) child.
-    expect(flatten(tree).some((s) => s.startsWith("tab:Overview:ref_"))).toBe(true);
+    expect(flatten(tree).some((s) => s.startsWith('tab:Overview:ref_'))).toBe(true);
   });
 
-  it("computes a name-from-content for a multi-child heading", () => {
-    const { document } = parseHTML(
-      `<main><h1><span>HTTP</span> Load Balancers</h1></main>`,
-    );
+  it('computes a name-from-content for a multi-child heading', () => {
+    const { document } = parseHTML(`<main><h1><span>HTTP</span> Load Balancers</h1></main>`);
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // biome-ignore lint/style/noNonNullAssertion: test fixture
+    const tree = serializeAx(document.querySelector('main')!, refMap);
     // The heading claims the content name; the child span is presentational.
-    expect(flatten(tree).some((s) => s.startsWith("heading:HTTP Load Balancers:ref_"))).toBe(true);
-    expect(flatten(tree).filter((s) => s.includes("HTTP Load Balancers")).length).toBe(1);
+    expect(flatten(tree).some((s) => s.startsWith('heading:HTTP Load Balancers:ref_'))).toBe(true);
+    expect(flatten(tree).filter((s) => s.includes('HTTP Load Balancers')).length).toBe(1);
   });
 
-  it("maps common tags and prefers placeholder for names", () => {
+  it('maps common tags and prefers placeholder for names', () => {
     const { document } = parseHTML(
       `<form><input type="search" placeholder="Find"><select></select><a href="#">Docs</a></form>`,
     );
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("form")!, refMap);
+    // biome-ignore lint/style/noNonNullAssertion: test fixture
+    const tree = serializeAx(document.querySelector('form')!, refMap);
     const flat = flatten(tree);
-    expect(flat.some((s) => s.startsWith("textbox:Find:ref_"))).toBe(true);
-    expect(flat.some((s) => s.startsWith("combobox::ref_"))).toBe(true);
-    expect(flat.some((s) => s.startsWith("link:Docs:ref_"))).toBe(true);
+    expect(flat.some((s) => s.startsWith('textbox:Find:ref_'))).toBe(true);
+    expect(flat.some((s) => s.startsWith('combobox::ref_'))).toBe(true);
+    expect(flat.some((s) => s.startsWith('link:Docs:ref_'))).toBe(true);
   });
 
-  it("skips script, style, noscript and template elements", () => {
+  it('skips script, style, noscript and template elements', () => {
     const { document } = parseHTML(
       `<main><script>var a=1;</script><style>.x{}</style><noscript>x</noscript><template><b>t</b></template><button>Go</button></main>`,
     );
     const refMap = new Map<string, WeakRef<Element>>();
-    const tree = serializeAx(document.querySelector("main")!, refMap);
+    // biome-ignore lint/style/noNonNullAssertion: test fixture
+    const tree = serializeAx(document.querySelector('main')!, refMap);
     const flat = flatten(tree);
 
     // Only the <main> and the <button> should be serialized.
     expect(tree.children.length).toBe(1);
-    expect(flat.some((s) => s.startsWith("button:Go:ref_"))).toBe(true);
+    expect(flat.some((s) => s.startsWith('button:Go:ref_'))).toBe(true);
     expect(flat.length).toBe(2);
     // refMap holds exactly the serialized nodes (main + button).
     expect(refMap.size).toBe(2);
   });
 });
 
-describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
-  it("sets value via the prototype setter, bypassing an instance-patched descriptor", () => {
-    let nativeStored = "";
+describe('commitInputValue (ported from xcsh input-commit.ts)', () => {
+  it('sets value via the prototype setter, bypassing an instance-patched descriptor', () => {
+    let nativeStored = '';
     const proto = {};
-    Object.defineProperty(proto, "value", {
+    Object.defineProperty(proto, 'value', {
       configurable: true,
       get() {
         return nativeStored;
@@ -87,9 +88,10 @@ describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
         nativeStored = v;
       },
     });
+    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
     const el: any = Object.create(proto);
     let patchedCalled = false;
-    Object.defineProperty(el, "value", {
+    Object.defineProperty(el, 'value', {
       configurable: true,
       get() {
         return nativeStored;
@@ -99,6 +101,7 @@ describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
       },
     });
     const events: string[] = [];
+    // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
     el.dispatchEvent = (e: any) => {
       events.push(e.type);
       return true;
@@ -108,6 +111,7 @@ describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
         Event: class {
           type: string;
           bubbles: boolean;
+          // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
           constructor(t: string, o?: any) {
             this.type = t;
             this.bubbles = !!o?.bubbles;
@@ -115,9 +119,9 @@ describe("commitInputValue (ported from xcsh input-commit.ts)", () => {
         },
       },
     };
-    commitInputValue(el, "x.example.com");
-    expect(nativeStored).toBe("x.example.com");
+    commitInputValue(el, 'x.example.com');
+    expect(nativeStored).toBe('x.example.com');
     expect(patchedCalled).toBe(false);
-    expect(events).toEqual(["input", "change", "blur", "focusout"]);
+    expect(events).toEqual(['input', 'change', 'blur', 'focusout']);
   });
 });

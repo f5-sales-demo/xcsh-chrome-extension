@@ -21,21 +21,14 @@ export interface CdpAxNode {
 
 type Target = { tabId: number };
 
+// biome-ignore lint/suspicious/noExplicitAny: CDP protocol types
 function send(target: Target, method: string, params: Record<string, unknown> = {}): Promise<any> {
   return chrome.debugger.sendCommand(target, method, params);
 }
 
 // Roles that carry no semantic value for selector matching — flattened away
 // (their named descendants are promoted) to keep the serialized tree small.
-const NOISE_ROLES = new Set([
-  "none",
-  "presentation",
-  "generic",
-  "GenericContainer",
-  "InlineTextBox",
-  "LineBreak",
-  "",
-]);
+const NOISE_ROLES = new Set(['none', 'presentation', 'generic', 'GenericContainer', 'InlineTextBox', 'LineBreak', '']);
 
 interface RawAxNode {
   nodeId: string;
@@ -49,8 +42,8 @@ interface RawAxNode {
 /** Build the AX tree via CDP, pruned to matchable nodes. Caller must have attached the debugger. */
 export async function readAxTree(tabId: number): Promise<CdpAxNode> {
   const target = { tabId };
-  await send(target, "DOM.enable");
-  const { nodes } = (await send(target, "Accessibility.getFullAXTree")) as { nodes: RawAxNode[] };
+  await send(target, 'DOM.enable');
+  const { nodes } = (await send(target, 'Accessibility.getFullAXTree')) as { nodes: RawAxNode[] };
   const byId = new Map<string, RawAxNode>();
   for (const n of nodes) byId.set(n.nodeId, n);
 
@@ -64,8 +57,8 @@ export async function readAxTree(tabId: number): Promise<CdpAxNode> {
       const child = byId.get(cid);
       if (!child || seen.has(cid)) continue;
       seen.add(cid);
-      const role = child.role?.value ?? "";
-      const name = typeof child.name?.value === "string" ? child.name.value : "";
+      const role = child.role?.value ?? '';
+      const name = typeof child.name?.value === 'string' ? child.name.value : '';
       const interesting = !child.ignored && (!NOISE_ROLES.has(role) || name.length > 0);
       if (interesting) {
         out.push({
@@ -85,11 +78,11 @@ export async function readAxTree(tabId: number): Promise<CdpAxNode> {
   const childIdSet = new Set<string>();
   for (const n of nodes) for (const c of n.childIds ?? []) childIdSet.add(c);
   const root = nodes.find((n) => !childIdSet.has(n.nodeId)) ?? nodes[0];
-  if (!root) throw new Error("read_ax: empty accessibility tree");
+  if (!root) throw new Error('read_ax: empty accessibility tree');
   seen.add(root.nodeId);
   return {
-    role: root.role?.value ?? "RootWebArea",
-    name: typeof root.name?.value === "string" ? root.name.value : "",
+    role: root.role?.value ?? 'RootWebArea',
+    name: typeof root.name?.value === 'string' ? root.name.value : '',
     ref: root.backendDOMNodeId != null ? String(root.backendDOMNodeId) : undefined,
     children: childrenOf(root),
   };
@@ -98,11 +91,11 @@ export async function readAxTree(tabId: number): Promise<CdpAxNode> {
 async function backendCenter(tabId: number, backendNodeId: number): Promise<{ x: number; y: number }> {
   const target = { tabId };
   try {
-    await send(target, "DOM.scrollIntoViewIfNeeded", { backendNodeId });
+    await send(target, 'DOM.scrollIntoViewIfNeeded', { backendNodeId });
   } catch {
     /* best-effort: some nodes can't scroll, getBoxModel may still work */
   }
-  const { model } = (await send(target, "DOM.getBoxModel", { backendNodeId })) as {
+  const { model } = (await send(target, 'DOM.getBoxModel', { backendNodeId })) as {
     model: { content: number[] };
   };
   const c = model.content; // [x1,y1, x2,y2, x3,y3, x4,y4]
@@ -118,18 +111,18 @@ function backendId(ref: string): number {
 export async function clickRef(tabId: number, ref: string): Promise<{ x: number; y: number }> {
   const { x, y } = await backendCenter(tabId, backendId(ref));
   const target = { tabId };
-  await send(target, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  await send(target, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-  await send(target, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  await send(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  await send(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+  await send(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
   return { x, y };
 }
 
 export async function scrollRef(tabId: number, ref: string): Promise<void> {
-  await send({ tabId }, "DOM.scrollIntoViewIfNeeded", { backendNodeId: backendId(ref) });
+  await send({ tabId }, 'DOM.scrollIntoViewIfNeeded', { backendNodeId: backendId(ref) });
 }
 
 async function resolveObject(tabId: number, ref: string): Promise<string> {
-  const { object } = (await send({ tabId }, "DOM.resolveNode", { backendNodeId: backendId(ref) })) as {
+  const { object } = (await send({ tabId }, 'DOM.resolveNode', { backendNodeId: backendId(ref) })) as {
     object: { objectId: string };
   };
   return object.objectId;
@@ -151,7 +144,7 @@ const COMMIT_FN = `function(value){
 
 export async function formInputRef(tabId: number, ref: string, value: string): Promise<void> {
   const objectId = await resolveObject(tabId, ref);
-  await send({ tabId }, "Runtime.callFunctionOn", {
+  await send({ tabId }, 'Runtime.callFunctionOn', {
     objectId,
     functionDeclaration: COMMIT_FN,
     arguments: [{ value }],
@@ -160,7 +153,7 @@ export async function formInputRef(tabId: number, ref: string, value: string): P
 
 export async function selectOptionRef(tabId: number, ref: string, value: string): Promise<boolean> {
   const objectId = await resolveObject(tabId, ref);
-  const r = (await send({ tabId }, "Runtime.callFunctionOn", {
+  const r = (await send({ tabId }, 'Runtime.callFunctionOn', {
     objectId,
     functionDeclaration: `function(value){
       const opts = Array.from(this.options || []);
@@ -178,10 +171,10 @@ export async function selectOptionRef(tabId: number, ref: string, value: string)
 
 export async function innerTextRef(tabId: number, ref: string): Promise<string> {
   const objectId = await resolveObject(tabId, ref);
-  const r = (await send({ tabId }, "Runtime.callFunctionOn", {
+  const r = (await send({ tabId }, 'Runtime.callFunctionOn', {
     objectId,
     functionDeclaration: `function(){ return this.innerText || this.textContent || ''; }`,
     returnByValue: true,
   })) as { result?: { value?: string } };
-  return r?.result?.value ?? "";
+  return r?.result?.value ?? '';
 }
