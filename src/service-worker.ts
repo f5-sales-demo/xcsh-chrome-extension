@@ -886,24 +886,24 @@ async function click(params: {
   return { clicked: ref, x, y };
 }
 
-async function screenshot(): Promise<{ data: string; format: string }> {
-  const tabId = requireTab();
-  const tab = await chrome.tabs.get(tabId);
-  await chrome.tabs.update(tabId, { active: true });
-  // captureVisibleTab returns a data URL. On a retina Mac, even q20 can exceed
-  // the ~1MB native-messaging message limit. Capture at q10, check the size,
-  // and return a clear error if too large (never silently timeout).
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "jpeg",
-    quality: 10,
-  });
-  const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
-  if (data.length > 900_000) {
-    throw new Error(
-      `screenshot too large for native messaging: ${Math.round(data.length / 1024)}KB (retina display; max ~900KB)`,
-    );
+async function screenshot(): Promise<{ data: string; format: string } | { error: string }> {
+  try {
+    const tabId = requireTab();
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "jpeg",
+      quality: 5, // q5 for 3024x1964 retina — must stay well under 1MB
+    });
+    const data = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+    if (data.length > 900_000) {
+      return { error: `screenshot ${Math.round(data.length / 1024)}KB exceeds 900KB native-messaging limit (retina ${tab.width}x${tab.height})` } as any;
+    }
+    return { data, format: "jpeg" };
+  } catch (e: any) {
+    // Return the error as content (not throw) so it always reaches the bridge.
+    return { error: `screenshot failed: ${e?.message ?? String(e)}` } as any;
   }
-  return { data, format: "jpeg" };
 }
 
 async function formInput(params: {
