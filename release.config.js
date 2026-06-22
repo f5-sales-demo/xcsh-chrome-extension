@@ -60,12 +60,10 @@ export default {
 				assets: [{ path: "xcsh-chrome-extension.zip", label: "Chrome extension (v${nextRelease.version})" }],
 			},
 		],
-		[
-			"@semantic-release/git",
-			{
-				assets: ["manifest.json", "package.json"],
-				message: "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
-			},
-		],
+		// No @semantic-release/git: the released version lives in the git tag +
+		// GitHub release + the published CWS package, NOT in a bot-commit to main.
+		// The build sets the version at release time (set-version.mjs). This keeps
+		// main clean and ensures the tag is only created on a SUCCESSFUL publish
+		// (so a failed CWS upload never leaves a dangling tag/commit).
 	],
 };
