@@ -1,3 +1,10 @@
 {
-  "customSets": []
+  "customSets": [
+    {
+      "label": "Install",
+      "description": "Install the xcsh Chrome Extension from a GitHub release (unpacked)",
+      "paths": ["install*"]
+    }
+  ],
+  "promote": ["index*", "install*"]
 }
