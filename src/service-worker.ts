@@ -192,7 +192,7 @@ function scheduleFastReconnect(): void {
     if (port) return;
     connect();
     if (!port) {
-      const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)]!;
+      const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
       attempt++;
       fastReconnectTimer = setTimeout(tick, delay);
     }
@@ -1259,7 +1259,10 @@ async function evaluateWithRecovery(tabId: number, code: string, timeoutMs = 8_0
       awaitPromise: true,
     });
   const withTimeout = (p: Promise<unknown>) =>
-    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('Runtime.evaluate timed out')), timeoutMs))]);
+    Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Runtime.evaluate timed out')), timeoutMs)),
+    ]);
   try {
     return await withTimeout(evalOnce());
   } catch {
