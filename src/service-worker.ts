@@ -1,14 +1,14 @@
 /**
  * xcsh service worker — native-messaging client + the 5 tools.
  *
- * Connects to the native host `com.f5xc.xcsh.chrome_host`, handles the tool
+ * Connects to the native host `com.xcsh.xcsh.chrome_host`, handles the tool
  * protocol (`tool_request` -> `tool_result`, `ping` -> `pong`), and drives the
  * scoped F5 XC console tab via chrome.scripting + chrome.debugger.
  */
 
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
-const NATIVE_HOST = 'com.f5xc.xcsh.chrome_host';
+const NATIVE_HOST = 'com.xcsh.xcsh.chrome_host';
 const RECONNECT_ALARM = 'reconnect';
 const MANAGED_POLICY_ALARM = 'managed-policy-refresh';
 const VERSION = '0.1.0';
