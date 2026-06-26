@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@f5xc-salesdemos/xcsh-chrome-extension",
+      "name": "@f5-sales-demo/xcsh-chrome-extension",
       "devDependencies": {
         "@types/bun": "^1.3.14",
         "@types/chrome": "^0.2.0",
