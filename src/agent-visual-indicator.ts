@@ -25,10 +25,14 @@ const BADGE_ID = '__xcsh-agent-badge';
 
 const RED = '#ca260a'; // xcsh CLI frame red — keeps brand parity with the terminal UI
 
-const ATTACK = 'opacity 120ms ease-out'; // quick snap to bright when activity begins
-const HOLD_MS = 800; // minimum dwell at full brightness after a trigger before discharge
-const RELEASE = 'opacity 1400ms ease-out'; // gentle discharge after the hold elapses
-const CLEANUP_MS = 1500; // remove from DOM once the release has fully faded
+// Envelope shape — a "breath": a quick organic rise (not a jarring snap), a brief
+// hold at full, then a long gentle exhale. A retrigger during the exhale cancels
+// the discharge and re-runs onAttack, so the ATTACK transition glides (portamento)
+// from the current decayed opacity back to full rather than snapping.
+const ATTACK = 'opacity 180ms cubic-bezier(.22,.61,.36,1)'; // rapid, organic breath-in
+const HOLD_MS = 600; // minimum dwell at full brightness before the discharge begins
+const RELEASE = 'opacity 1800ms ease-out'; // long, gentle exhale (capacitor discharge)
+const CLEANUP_MS = 1900; // remove from DOM once the release has fully faded (>= RELEASE)
 
 let scanner: HTMLDivElement | undefined;
 let badge: HTMLDivElement | undefined;
@@ -78,8 +82,8 @@ function createElements(): void {
   shadow.innerHTML =
     '<style>' +
     '*{box-sizing:border-box}' +
-    `.eff{display:inline-flex;align-items:center;gap:8px;background:#0a0d11;border:1.5px solid ${RED};border-radius:9px;padding:6px 12px 6px 8px;box-shadow:0 3px 12px rgba(0,0,0,.5),0 0 12px rgba(202,38,10,.4);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}` +
-    `.eff:hover{border-color:#e8330f;box-shadow:0 3px 14px rgba(0,0,0,.55),0 0 18px rgba(202,38,10,.6)}` +
+    `.eff{display:inline-flex;align-items:center;gap:8px;background:#0a0d11;border:1.5px solid ${RED};border-radius:9px;padding:6px 12px 6px 8px;box-shadow:0 6px 16px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.45),0 0 12px rgba(202,38,10,.4);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}` +
+    `.eff:hover{border-color:#e8330f;box-shadow:0 8px 20px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.5),0 0 18px rgba(202,38,10,.6)}` +
     '.eff img{display:block;width:24px;height:24px}' +
     `.eff .w{font-weight:800;letter-spacing:1px;font-size:15px;text-transform:none;color:${RED}}` +
     '</style>' +
@@ -90,6 +94,56 @@ function createElements(): void {
     chrome.runtime.sendMessage({ type: 'stop_agent' });
   });
   document.documentElement.appendChild(badge);
+}
+
+/**
+ * Drop a transient "fingerprint" at a click point so a human watcher sees where
+ * the agent just clicked. Every agent click is dispatched by the service worker,
+ * which sends `click_ping {x, y}` (viewport CSS px — the same space a fixed
+ * overlay uses); here we bloom a crisp red fingerprint with a blue ripple and
+ * fade them out. Each ping is an isolated, self-removing Shadow-DOM overlay
+ * animated with the Web Animations API, so it neither depends on nor disturbs
+ * the host page's CSS.
+ */
+function clickPing(x?: number, y?: number): void {
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const host = document.createElement('div');
+  host.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:2147483647;pointer-events:none;`;
+  const root = host.attachShadow({ mode: 'open' });
+  // ring + fingerprint are centered on the click point via negative margins, so a
+  // scale animation grows them symmetrically around it.
+  root.innerHTML =
+    '<div class="ring" style="position:absolute;left:0;top:0;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;border:2px solid #2f80ed;filter:drop-shadow(0 0 4px rgba(47,128,237,.65))"></div>' +
+    '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#ca260a" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:0;top:0;margin:-18px 0 0 -18px;filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 0 3px rgba(202,38,10,.4))">' +
+    '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>';
+  document.documentElement.appendChild(host);
+
+  const ring = root.querySelector('.ring') as HTMLElement | null;
+  const fp = root.querySelector('svg');
+  ring?.animate(
+    [
+      { opacity: 0, transform: 'scale(.35)' },
+      { opacity: 0.7, offset: 0.12 },
+      { opacity: 0, transform: 'scale(2.9)' },
+    ],
+    { duration: 850, easing: 'ease-out' },
+  );
+  const done = fp?.animate(
+    [
+      { opacity: 0, transform: 'scale(.45)' },
+      { opacity: 1, transform: 'scale(1)', offset: 0.14 },
+      { opacity: 1, transform: 'scale(1)', offset: 0.42 },
+      { opacity: 0, transform: 'scale(1.32)' },
+    ],
+    { duration: 850, easing: 'ease-in-out' },
+  );
+  if (done) {
+    done.onfinish = () => host.remove();
+    done.oncancel = () => host.remove();
+  } else {
+    // Web Animations unavailable — clean up on a timer so we never leak overlays.
+    setTimeout(() => host.remove(), 900);
+  }
 }
 
 const effects: EnvelopeEffects = {
@@ -127,7 +181,8 @@ const effects: EnvelopeEffects = {
 
 const envelope = createEnvelope(effects, { holdMs: HOLD_MS, cleanupMs: CLEANUP_MS });
 
-chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
+chrome.runtime.onMessage.addListener((msg: { type?: string; x?: number; y?: number }) => {
   if (msg?.type === 'indicator_show') envelope.show();
   if (msg?.type === 'indicator_hide') envelope.hide();
+  if (msg?.type === 'click_ping') clickPing(msg.x, msg.y);
 });

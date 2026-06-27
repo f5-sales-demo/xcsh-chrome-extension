@@ -1161,6 +1161,10 @@ async function dispatchClickAt(tabId: number, x: number, y: number): Promise<voi
     button: 'left',
     clickCount: 1,
   });
+  // Visual cue for human watchers: bloom a fingerprint at the click point. The
+  // content-script indicator renders it at these viewport coords (best-effort —
+  // the page may not have the content script yet, e.g. mid-navigation).
+  chrome.tabs.sendMessage(tabId, { type: 'click_ping', x, y }).catch(() => {});
 }
 
 async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
