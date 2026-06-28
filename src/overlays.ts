@@ -22,6 +22,7 @@ const HIGHLIGHT_PAD = 4; // px of breathing room the highlight leaves around the
 export type OverlaySpec =
   | { kind: 'fingerprint'; x?: number; y?: number }
   | { kind: 'highlight'; x?: number; y?: number; w?: number; h?: number }
+  | { kind: 'callout'; x?: number; y?: number; text?: string }
   // Permissive fallthrough so a message from the wire is assignable; unknown
   // kinds resolve to `null` in `planOverlay`.
   | { kind?: string; [k: string]: unknown };
@@ -130,6 +131,36 @@ export function planOverlay(spec: OverlaySpec): OverlayPlan | null {
         },
       ],
       ttlMs: 1600,
+    };
+  }
+
+  if (kind === 'callout') {
+    const x = finite(s.x);
+    const y = finite(s.y);
+    const text = typeof s.text === 'string' ? s.text : '';
+    if (x === undefined || y === undefined || text.length === 0) return null;
+    // Position the callout above the target (offset up by ~40px so it doesn't
+    // cover what it's pointing at). Escape HTML to avoid injection.
+    const safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html =
+      `<div class="callout" style="position:absolute;left:0;top:0;transform:translateX(-50%);max-width:280px;padding:8px 12px;border-radius:8px;background:#0a0d11;border:1.5px solid ${RED};box-shadow:0 3px 14px rgba(0,0,0,.5),0 0 10px rgba(202,38,10,.4);color:#e8ecf4;font:600 13px/1.4 'JetBrains Mono',ui-monospace,Menlo,monospace;white-space:pre-wrap;pointer-events:none">${safeText}</div>`;
+    return {
+      left: x,
+      top: y - 44, // above the target
+      html,
+      anims: [
+        {
+          sel: '.callout',
+          keyframes: [
+            { opacity: 0, transform: 'translateX(-50%) translateY(8px)' },
+            { opacity: 1, transform: 'translateX(-50%) translateY(0)', offset: 0.12 },
+            { opacity: 1, transform: 'translateX(-50%) translateY(0)', offset: 0.7 },
+            { opacity: 0, transform: 'translateX(-50%) translateY(-4px)' },
+          ],
+          timing: { duration: 2200, easing: 'ease-in-out' },
+        },
+      ],
+      ttlMs: 2400,
     };
   }
 
