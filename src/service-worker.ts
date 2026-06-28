@@ -103,6 +103,13 @@ let loginInProgress = false;
 // re-attaching needlessly.
 const attachedTabs = new Set<number>();
 
+// Explain mode: when true, the agent is doing a deliberate, human-paced
+// walkthrough and on-page annotation overlays (fingerprints, highlights) are
+// shown. OFF by default — under fast automation overlays are a confusing blur.
+// Set by the `set_explain_mode` tool; in-memory only (a walkthrough runs well
+// within the SW keepalive window).
+let explainMode = false;
+
 // Allowed console URL patterns for tabs_list (mirrors host_permissions).
 const ALLOWED_PATTERNS = ['https://*.volterra.us/*', 'https://*.console.ves.volterra.io/*'];
 
@@ -301,8 +308,9 @@ function stopAgent(): void {
 
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
 async function runTool(tool: string, params: any): Promise<unknown> {
-  // Pulse the on-page indicator while any non-trivial tool runs.
-  const broadcastsIndicator = tool !== 'ping';
+  // Pulse the on-page indicator while any non-trivial tool runs. `set_explain_mode`
+  // takes no page action, so it stays silent like `ping`.
+  const broadcastsIndicator = tool !== 'ping' && tool !== 'set_explain_mode';
   if (broadcastsIndicator && targetTabId !== undefined) {
     chrome.tabs.sendMessage(targetTabId, { type: 'indicator_show' }).catch(() => {});
   }
@@ -417,6 +425,12 @@ async function dispatchTool(tool: string, params: any): Promise<unknown> {
 
     case 'detach':
       return detach();
+
+    case 'set_explain_mode':
+      return setExplainMode(params);
+
+    case 'annotate':
+      return annotate(params);
 
     default:
       throw new Error(`unknown tool: ${tool}`);
@@ -1161,10 +1175,93 @@ async function dispatchClickAt(tabId: number, x: number, y: number): Promise<voi
     button: 'left',
     clickCount: 1,
   });
-  // Visual cue for human watchers: bloom a fingerprint at the click point. The
-  // content-script indicator renders it at these viewport coords (best-effort —
-  // the page may not have the content script yet, e.g. mid-navigation).
-  chrome.tabs.sendMessage(tabId, { type: 'click_ping', x, y }).catch(() => {});
+  // Visual cue for human watchers — ONLY during a deliberate "explain" walkthrough
+  // (off under fast automation, where a burst of clicks is just a blur). Best-effort:
+  // the page may not have the content script yet (e.g. mid-navigation).
+  if (explainMode) {
+    chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
+  }
+}
+
+/** Enter/leave explain mode (the gate for all on-page annotation overlays). */
+function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
+  explainMode = !!params?.enabled;
+  return { enabled: explainMode };
+}
+
+/**
+ * Draw an overlay annotation on the target tab — the agent-callable side of the
+ * overlay library. No-ops (returns `{ skipped }`) unless explain mode is on, so the
+ * "off by default" rule holds even for explicit calls. `highlight` accepts either
+ * an explicit rect or a `ref` we resolve to its border box here (the same ref the
+ * agent uses to click); `fingerprint` takes a point.
+ */
+async function annotate(params: {
+  kind?: string;
+  ref?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}): Promise<unknown> {
+  const kind = params?.kind;
+  if (!kind) throw new Error('annotate: kind is required');
+  if (!explainMode) return { skipped: true, reason: 'explain mode off' };
+  const tabId = requireTab();
+
+  if (kind === 'highlight') {
+    let rect: { x: number; y: number; w: number; h: number } | undefined;
+    if ([params.x, params.y, params.w, params.h].every((n) => Number.isFinite(Number(n)))) {
+      rect = { x: Number(params.x), y: Number(params.y), w: Number(params.w), h: Number(params.h) };
+    } else if (params.ref) {
+      rect = await resolveRectByRef(tabId, params.ref);
+    }
+    if (!rect) throw new Error('annotate: highlight needs numeric x/y/w/h or a resolvable ref');
+    chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'highlight', ...rect }).catch(() => {});
+    return { drawn: 'highlight', ...rect };
+  }
+
+  if (kind === 'fingerprint') {
+    const x = Number(params.x);
+    const y = Number(params.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('annotate: fingerprint needs numeric x,y');
+    chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
+    return { drawn: 'fingerprint', x, y };
+  }
+
+  throw new Error(`annotate: unknown kind: ${kind}`);
+}
+
+/**
+ * Resolve a read_ax ref to its border-box rect (CSS viewport px) via the live
+ * element handle + CDP box model — the same resolver path `click` uses.
+ */
+async function resolveRectByRef(
+  tabId: number,
+  ref: string,
+): Promise<{ x: number; y: number; w: number; h: number } | undefined> {
+  await ensureDebuggerAttached(tabId);
+  const objectId = await evalForObject(
+    tabId,
+    `(typeof __xcshResolveRefEl === 'function' ? __xcshResolveRefEl(${JSON.stringify(ref)}) : null)`,
+  );
+  if (!objectId) return undefined;
+  try {
+    await chrome.debugger.sendCommand({ tabId }, 'DOM.scrollIntoViewIfNeeded', { objectId }).catch(() => {});
+    const bm = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getBoxModel', { objectId })) as {
+      model?: { border?: number[] };
+    };
+    const b = bm.model?.border;
+    if (!b || b.length < 8) return undefined;
+    // border quad: [x1,y1, x2,y2, x3,y3, x4,y4] (TL, TR, BR, BL) in CSS px.
+    const xs = [b[0], b[2], b[4], b[6]];
+    const ys = [b[1], b[3], b[5], b[7]];
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  } finally {
+    await chrome.debugger.sendCommand({ tabId }, 'Runtime.releaseObject', { objectId }).catch(() => {});
+  }
 }
 
 async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
