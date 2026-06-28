@@ -50,4 +50,23 @@ describe('planOverlay', () => {
       expect(plan.ttlMs).toBeGreaterThanOrEqual(plan.anims[0].timing.duration);
     });
   });
+
+  describe('callout', () => {
+    it('requires finite position and a non-empty text', () => {
+      expect(planOverlay({ kind: 'callout', x: 1, y: 1 })).toBeNull(); // no text
+      expect(planOverlay({ kind: 'callout', text: 'hello' })).toBeNull(); // no position
+      expect(planOverlay({ kind: 'callout', x: 1, y: 1, text: '' })).toBeNull(); // empty text
+    });
+
+    it('positions the host at the target and includes the text in the markup', () => {
+      const plan = planOverlay({ kind: 'callout', x: 200, y: 100, text: 'Click the Add button' });
+      expect(plan).not.toBeNull();
+      if (!plan) return;
+      expect(plan.left).toBe(200);
+      expect(plan.top).toBeLessThanOrEqual(100); // above/at the target
+      expect(plan.html).toContain('Click the Add button');
+      expect(plan.anims.length).toBeGreaterThan(0);
+      expect(plan.ttlMs).toBeGreaterThanOrEqual(plan.anims[0].timing.duration);
+    });
+  });
 });
