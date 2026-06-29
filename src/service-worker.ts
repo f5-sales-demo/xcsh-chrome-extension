@@ -331,12 +331,14 @@ function onMessage(msg: any): void {
 // WebSocket `onclose` schedules a reconnect if the initial connect finds no
 // bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
-// Restore the dynamic bridge port from storage (survives extension reload), then connect.
+// Connect immediately on the default port; then async-read any stored override.
+// (Moving connect() inside the async callback broke MV3 SW suspension timing.)
+connect();
 chrome.storage.local.get('bridgePort', (data) => {
-  if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024) {
+  if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
+    if (ws) ws.close(); // reconnect on the stored port
   }
-  connect();
 });
 // Open the side panel when the toolbar icon is clicked (requires an `action`
 // with no default_popup in the manifest). Must run at top level — the SW restarts.
