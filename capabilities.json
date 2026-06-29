@@ -389,6 +389,25 @@
       }
     },
     {
+      "name": "query_dom",
+      "summary": "Direct DOM.querySelector at wire speed — bypasses Runtime.evaluate for simple CSS selectors.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "required": [
+          "selector"
+        ],
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      },
+      "flags": {
+        "readOnly": true
+      }
+    },
+    {
       "name": "find",
       "summary": "Find AX nodes matching a locator.",
       "category": "read",

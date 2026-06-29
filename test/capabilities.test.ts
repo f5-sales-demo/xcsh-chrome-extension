@@ -33,6 +33,7 @@ const EXPECTED_TOOLS = [
   'file_upload',
   'browser_batch',
   'read_ax',
+  'query_dom',
   'wait_for',
   'assert_text',
   'find',

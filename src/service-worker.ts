@@ -491,6 +491,7 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   file_upload: fileUpload,
   browser_batch: browserBatch,
   read_ax: readAx,
+  query_dom: queryDom,
   wait_for: waitFor,
   assert_text: assertText,
   find,
@@ -1217,6 +1218,48 @@ async function assertText(params: {
     throw new Error(`assert failed: "${expected}" not in "${text.slice(0, 200)}"`);
   }
   return { asserted: true, text: text.slice(0, 200) };
+}
+
+async function queryDom(params: {
+  selector: string;
+}): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
+  const tabId = requireTab();
+  await ensureDebuggerAttached(tabId);
+  try {
+    const doc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: 0 })) as {
+      root?: { nodeId?: number };
+    };
+    const rootId = doc?.root?.nodeId;
+    if (!rootId) return { found: false };
+    const result = (await chrome.debugger.sendCommand({ tabId }, 'DOM.querySelector', {
+      nodeId: rootId,
+      selector: params.selector,
+    })) as { nodeId?: number };
+    if (!result?.nodeId || result.nodeId === 0) return { found: false };
+    const desc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.describeNode', {
+      nodeId: result.nodeId,
+    })) as { node?: { nodeName?: string; localName?: string } };
+    let text = '';
+    try {
+      const html = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getOuterHTML', {
+        nodeId: result.nodeId,
+      })) as { outerHTML?: string };
+      text = (html?.outerHTML ?? '')
+        .replace(/<[^>]*>/g, '')
+        .trim()
+        .slice(0, 50);
+    } catch {
+      /* text extraction is best-effort */
+    }
+    return {
+      found: true,
+      nodeId: result.nodeId,
+      tag: desc?.node?.nodeName ?? desc?.node?.localName ?? 'unknown',
+      text,
+    };
+  } catch {
+    return { found: false };
+  }
 }
 
 async function find(params: {

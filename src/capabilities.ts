@@ -160,6 +160,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   { name: 'read_ax', summary: 'Read the accessibility tree of the page.', category: 'read', params: empty },
   { name: 'get_page_text', summary: 'Return the page text.', category: 'read', params: empty },
   {
+    name: 'query_dom',
+    summary: 'Direct DOM.querySelector at wire speed — bypasses Runtime.evaluate for simple CSS selectors.',
+    category: 'read',
+    params: Type.Object({ selector: Type.String() }),
+  },
+  {
     name: 'find',
     summary: 'Find AX nodes matching a locator.',
     category: 'read',
@@ -257,6 +263,7 @@ const READ_ONLY = new Set([
   'debug_exec',
   'read_ax',
   'get_page_text',
+  'query_dom',
   'find',
   'wait_for',
   'assert_text',
