@@ -6,7 +6,10 @@
  * and drives the scoped F5 XC console tab via chrome.scripting + chrome.debugger.
  */
 
+import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
 import { buildCapabilities, getToolDef, toolNames } from './capabilities';
+import { isChatInbound } from './chat-protocol';
+import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { runDispatch } from './dispatch';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
@@ -125,6 +128,17 @@ const networkBuffer: any[] = [];
 let observingConsole = false;
 let observingNetwork = false;
 
+// Chat: panel Ports keyed by chat-turn id ("c-…"), and the latest captured XC
+// API response per tab (ground-truth for the page-context snapshot).
+const turnToPort = new Map<string, chrome.runtime.Port>();
+type ApiCapture = RawApiCapture & { mimeType?: string };
+const latestApiCapture = new Map<number, ApiCapture>();
+// Pending request bodies we want, awaiting Network.loadingFinished.
+const pendingApi = new Map<
+  string,
+  { tabId: number; url: string; status: number; resourceType: string | null; mimeType?: string }
+>();
+
 async function enableConsoleObserver(): Promise<void> {
   if (observingConsole) return;
   const tabId = requireTab();
@@ -161,6 +175,52 @@ chrome.debugger.onEvent.addListener((source, method, eventParams) => {
     // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
     networkBuffer.push({ method, ...(eventParams as any) });
     if (networkBuffer.length > 500) networkBuffer.shift();
+    // Passive XC resource capture: note JSON resource responses, fetch the body
+    // on loadingFinished (bodies evict fast, so we can't wait until snapshot time).
+    if (method === 'Network.responseReceived') {
+      // biome-ignore lint/suspicious/noExplicitAny: CDP event shape
+      const e = eventParams as any;
+      const url: string = e.response?.url ?? '';
+      const mimeType: string | undefined = e.response?.mimeType;
+      if (isXcResourceApi(url) && isJsonMime(mimeType) && typeof e.requestId === 'string') {
+        pendingApi.set(e.requestId, {
+          tabId: source.tabId,
+          url,
+          status: e.response?.status ?? 0,
+          resourceType: resourceTypeFromUrl(url),
+          mimeType,
+        });
+      }
+    }
+  } else if (method === 'Network.loadingFinished') {
+    // biome-ignore lint/suspicious/noExplicitAny: CDP event shape
+    const e = eventParams as any;
+    const pend = typeof e.requestId === 'string' ? pendingApi.get(e.requestId) : undefined;
+    if (pend) {
+      pendingApi.delete(e.requestId);
+      const encoded: number = typeof e.encodedDataLength === 'number' ? e.encodedDataLength : 0;
+      if (shouldFetchBody(pend.mimeType, encoded)) {
+        chrome.debugger
+          .sendCommand({ tabId: pend.tabId }, 'Network.getResponseBody', { requestId: e.requestId })
+          .then((r) => {
+            const body = (r as { body?: string })?.body;
+            if (!body) return;
+            try {
+              latestApiCapture.set(pend.tabId, {
+                url: pend.url,
+                status: pend.status,
+                resourceType: pend.resourceType,
+                body: JSON.parse(body),
+              });
+            } catch {
+              /* non-JSON despite mime — ignore */
+            }
+          })
+          .catch(() => {
+            /* body already evicted — degrade to no capture for this tab */
+          });
+      }
+    }
   }
 });
 
@@ -247,6 +307,17 @@ function onMessage(msg: any): void {
           is_error: true,
         });
       });
+    return;
+  }
+
+  if (isChatInbound(msg)) {
+    const port = turnToPort.get(msg.id);
+    port?.postMessage(msg);
+    // Only delete on genuinely terminal messages — chat_tool_notice is
+    // non-terminal (more deltas/done/error follow), so deleting there would
+    // orphan the turn and drop all subsequent messages.
+    if (msg.type === 'chat_done' || msg.type === 'chat_error') turnToPort.delete(msg.id);
+    return;
   }
 }
 
@@ -255,6 +326,9 @@ function onMessage(msg: any): void {
 // bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
 connect();
+// Open the side panel when the toolbar icon is clicked (requires an `action`
+// with no default_popup in the manifest). Must run at top level — the SW restarts.
+chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 
 // Read the managed enterprise policy on startup.
 refreshManagedPolicy();
@@ -291,6 +365,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
+// --- Chat side panel Port --------------------------------------------------
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'xcsh-chat') return;
+  port.onMessage.addListener((m) => {
+    if (!m || typeof m !== 'object') return;
+    if (m.type === 'chat_request') {
+      turnToPort.set(m.id, port);
+      // Forward to the bridge as-is — buildChatRequest in the panel already
+      // produces the correct shape (type 'chat_request', omitting history_hint
+      // when absent). No reconstruction needed.
+      send(m);
+      return;
+    }
+    if (m.type === 'chat_stop') {
+      // Forward stop to the bridge; do NOT delete the turn port — the bridge sends
+      // a terminal chat_done/chat_error that the existing inbound routing handles.
+      send({ type: 'chat_stop', id: m.id });
+      return;
+    }
+    if (m.type === 'get_page_context') {
+      buildPageContext()
+        .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
+        .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
+      return;
+    }
+    if (m.type === 'chat_annotate') {
+      chatAnnotate(m).catch(() => {});
+      return;
+    }
+    if (m.type === 'status_request') {
+      port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+      return;
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    for (const [id, p] of turnToPort) if (p === port) turnToPort.delete(id);
+  });
+  // Greet with current connection status so the panel can render its dot.
+  port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+});
+
 /** Stop the agent: detach the debugger and hide the on-page indicator. */
 function stopAgent(): void {
   if (targetTabId !== undefined) {
@@ -316,11 +431,28 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   if (broadcastsIndicator && targetTabId !== undefined) {
     chrome.tabs.sendMessage(targetTabId, { type: 'indicator_show' }).catch(() => {});
   }
+  // Trivial tools excluded from the chat_tool_notice indicator.
+  const excludedFromNotice =
+    tool === 'ping' || tool === 'capabilities' || tool === 'set_explain_mode' || tool === 'get_page_context';
+  let ok = true;
   try {
-    return await dispatchTool(tool, params);
+    const result = await dispatchTool(tool, params);
+    return result;
+  } catch (e) {
+    ok = false;
+    throw e;
   } finally {
     if (broadcastsIndicator && targetTabId !== undefined) {
       chrome.tabs.sendMessage(targetTabId, { type: 'indicator_hide' }).catch(() => {});
+    }
+    // Best-effort chat_tool_notice: if exactly one chat turn is active, notify its port.
+    if (!excludedFromNotice && turnToPort.size === 1) {
+      try {
+        const [id, chatPort] = [...turnToPort.entries()][0];
+        chatPort.postMessage({ type: 'chat_tool_notice', id, tool, ok });
+      } catch {
+        /* best-effort — never block dispatch on chat state */
+      }
     }
   }
 }
@@ -373,6 +505,7 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   detach,
   set_explain_mode: setExplainMode,
   annotate,
+  get_page_context: () => buildPageContext(),
 };
 
 // Fail fast (at SW load) if the dispatch map and the published contract diverge —
@@ -860,12 +993,14 @@ async function clickElementByObjectId(
       let bestArea = 0;
       for (const q of quadsRes.quads ?? []) {
         // Shoelace area of the 4-point quad [x1,y1,x2,y2,x3,y3,x4,y4].
-        const a = Math.abs(
-          (q[0] * q[3] - q[2] * q[1]) +
-            (q[2] * q[5] - q[4] * q[3]) +
-            (q[4] * q[7] - q[6] * q[5]) +
-            (q[6] * q[1] - q[0] * q[7]),
-        ) / 2;
+        const a =
+          Math.abs(
+            q[0] * q[3] -
+              q[2] * q[1] +
+              (q[2] * q[5] - q[4] * q[3]) +
+              (q[4] * q[7] - q[6] * q[5]) +
+              (q[6] * q[1] - q[0] * q[7]),
+          ) / 2;
         if (a > bestArea) {
           bestArea = a;
           best = q;
@@ -907,14 +1042,12 @@ async function clickElementByObjectId(
       } catch {
         /* best-effort */
       }
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 150));
       ({ x, y } = await measure());
       verdict = await hitTest(x, y);
     }
     if (verdict !== 'hit') {
-      throw new Error(
-        `click: "${label}" not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`,
-      );
+      throw new Error(`click: "${label}" not hittable — point (${Math.round(x)},${Math.round(y)}) ${verdict}`);
     }
 
     await dispatchClickAt(tabId, x, y);
@@ -1142,6 +1275,60 @@ function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
   return { enabled: explainMode };
 }
 
+/** Build the page-context snapshot for the active console tab. */
+async function buildPageContext(): Promise<unknown> {
+  const tabId = requireTab();
+  await enableNetworkObserver(); // ensure future navigations are captured
+  let url = '';
+  let title = '';
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    url = tab.url ?? '';
+    title = tab.title ?? '';
+  } catch {
+    /* tab vanished — fall through with empties */
+  }
+  let ax: AxLike | null = null;
+  try {
+    ax = (await readAxFromTab()) as unknown as AxLike;
+  } catch {
+    /* page still loading — snapshot without ax */
+  }
+  const api = latestApiCapture.get(tabId) ?? null;
+  return buildContextSnapshot({ tabId, url, title, capturedAt: Date.now(), ax, api });
+}
+
+/**
+ * Draw an annotation for the chat/teaching path — like `annotate` but NOT gated
+ * by explain mode, because a chat-initiated highlight is an explicit, user-facing
+ * request. The fast-automation `annotate` tool keeps its "off by default" gate.
+ */
+async function chatAnnotate(spec: {
+  kind?: string;
+  ref?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}): Promise<void> {
+  if (targetTabId === undefined) return;
+  const tabId = targetTabId;
+  const kind = spec.kind ?? 'highlight';
+  if (kind === 'highlight') {
+    let rect: { x: number; y: number; w: number; h: number } | undefined;
+    if ([spec.x, spec.y, spec.w, spec.h].every((n) => Number.isFinite(Number(n)))) {
+      rect = { x: Number(spec.x), y: Number(spec.y), w: Number(spec.w), h: Number(spec.h) };
+    } else if (spec.ref) {
+      rect = await resolveRectByRef(tabId, spec.ref);
+    }
+    if (rect) chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'highlight', ...rect }).catch(() => {});
+  } else if (kind === 'fingerprint' && Number.isFinite(Number(spec.x)) && Number.isFinite(Number(spec.y))) {
+    chrome.tabs
+      .sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x: Number(spec.x), y: Number(spec.y) })
+      .catch(() => {});
+  }
+}
+
 /**
  * Draw an overlay annotation on the target tab — the agent-callable side of the
  * overlay library. No-ops (returns `{ skipped }`) unless explain mode is on, so the
@@ -1249,7 +1436,7 @@ async function clickElement(params: {
   const deadline = Date.now() + waitMs;
   let objectId = await evalForObject(tabId, js);
   while (!objectId && Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
     objectId = await evalForObject(tabId, js);
   }
   if (!objectId) throw new Error(`click_element: expression matched no element`);
@@ -1300,8 +1487,7 @@ async function labelSelect(params: {
   const labelValue = params?.label_value ?? '';
   // Cap well below the 30s bridge timeout so the handler finishes before the caller times out.
   const waitMs = Math.min(Number(params?.wait_ms ?? 8_000), 20_000);
-  if (typeof selector !== 'string' || selector.length === 0)
-    throw new Error('label_select: selector is required');
+  if (typeof selector !== 'string' || selector.length === 0) throw new Error('label_select: selector is required');
   await ensureDebuggerAttached(tabId);
 
   // ── A. Locate the typeahead input and get its viewport coords. ──────────────
@@ -1330,7 +1516,7 @@ async function labelSelect(params: {
   await dispatchClickAt(tabId, inputCoords.x, inputCoords.y);
 
   // ── C. Small settle, then type (Input.insertText keeps focus). ───────────────
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 300));
   await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text: value });
 
   // ── D. Poll the CDK portal for a matching option. ───────────────────────────
@@ -1339,10 +1525,11 @@ async function labelSelect(params: {
   const valueJson = JSON.stringify(value);
   const deadline = Date.now() + waitMs;
   let lastOptions: string[] = [];
-  let matchResult: { matched: boolean; kind: string; text: string; x: number; y: number; optionCount: number } | null = null;
+  let matchResult: { matched: boolean; kind: string; text: string; x: number; y: number; optionCount: number } | null =
+    null;
 
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 250));
     const poll = await evalInPage<{
       portal: boolean;
       matched?: boolean;
@@ -1420,13 +1607,16 @@ async function labelSelect(params: {
     // Tag lost (portal re-rendered) — fall back to the confirmed coords.
     await dispatchClickAt(tabId, matchResult.x, matchResult.y);
   }
-  await evalInPage(tabId, `document.querySelectorAll('[data-xcsh-pick]').forEach(n=>n.removeAttribute('data-xcsh-pick'))`).catch(() => {});
+  await evalInPage(
+    tabId,
+    `document.querySelectorAll('[data-xcsh-pick]').forEach(n=>n.removeAttribute('data-xcsh-pick'))`,
+  ).catch(() => {});
 
   // ── F. After selecting a key, a VALUE input appears. Type the value + Enter. ──
   // This commits the key=value label pair. Multiple labels can be added by calling
   // label_select again (each call = one key+value).
   if (labelValue) {
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1500));
     // Find the value input that appeared after key selection
     const valInput = await evalInPage<{ found: boolean; x: number; y: number }>(
       tabId,
@@ -1448,14 +1638,14 @@ async function labelSelect(params: {
     );
     if (valInput?.found) {
       await dispatchClickAt(tabId, valInput.x, valInput.y);
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 200));
       await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text: labelValue });
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 200));
       // Press Enter to commit the value
       const enterBase = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 };
       await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', { type: 'keyDown', ...enterBase });
       await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', { type: 'keyUp', ...enterBase });
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     }
   }
 
@@ -1764,20 +1954,20 @@ async function waitForApiResponse(params: {
         let error = `HTTP ${status}`;
         try {
           const tabId = requireTab();
-          const body = await chrome.debugger.sendCommand(
-            { tabId },
-            'Network.getResponseBody',
-            { requestId: e.requestId },
-          ) as { body?: string };
+          const body = (await chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', {
+            requestId: e.requestId,
+          })) as { body?: string };
           if (body?.body) {
             const parsed = JSON.parse(body.body);
             error = parsed.message ?? parsed.error ?? JSON.stringify(parsed).slice(0, 200);
           }
-        } catch { /* body not available */ }
+        } catch {
+          /* body not available */
+        }
         return { found: true, status, url, error };
       }
     }
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200));
   }
   return { found: false, error: 'no matching API response within timeout' };
 }
@@ -1881,5 +2071,13 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
 // Keep `attachedTabs` consistent if the debugger detaches out-of-band
 // (e.g. devtools opened, tab closed).
 chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId !== undefined) attachedTabs.delete(source.tabId);
+  if (source.tabId !== undefined) {
+    attachedTabs.delete(source.tabId);
+    latestApiCapture.delete(source.tabId);
+  }
+});
+
+// Clear a tab's capture when it closes.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  latestApiCapture.delete(tabId);
 });
