@@ -7,7 +7,12 @@
  */
 
 export function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export function isSafeUrl(url: string): boolean {
@@ -36,10 +41,11 @@ export function renderMarkdown(md: string): string {
   // 2) escape the rest
   s = escapeHtml(s);
 
-  // 3) inline code
+  // 3) inline code — `c` is drawn from the already-escapeHtml-ed string; do NOT escape again.
   s = s.replace(/`([^`]+)`/g, (_m, c: string) => `<code>${c}</code>`);
 
-  // 4) links [text](url) — url was escaped; decode for the safety check only
+  // 4) links [text](url) — url was escaped; decode for the safety check only.
+  //    `text` is drawn from the already-escapeHtml-ed string; do NOT escape again.
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text: string, rawUrl: string) => {
     const url = rawUrl.replace(/&amp;/g, '&');
     if (!isSafeUrl(url)) return text;
@@ -53,9 +59,11 @@ export function renderMarkdown(md: string): string {
   // 6) newlines → <br>
   s = s.replace(/\n/g, '<br>');
 
-  // 7) restore code blocks (also unwrap any <br> the join introduced around them)
+  // 7) restore code blocks (also unwrap any <br> the join introduced around them).
+  //    Fallback to _m when the index is out of range (e.g. a forged token in user text)
+  //    so we never leak the string "undefined" into the output.
   s = s.replace(/BLOCKPLACEHOLDER(\d+)BLOCKPLACEHOLDER/g, (_m, idx: string) => {
-    return blocks[parseInt(idx, 10)];
+    return blocks[parseInt(idx, 10)] ?? _m;
   });
   return s;
 }

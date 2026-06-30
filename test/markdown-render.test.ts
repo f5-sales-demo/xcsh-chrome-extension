@@ -34,4 +34,31 @@ describe('renderReferenceChip', () => {
     expect(html).toContain('&lt;x&gt;');
     expect(html).toContain('href="https://d"');
   });
+  it('falls back to href="#" and strips javascript: url', () => {
+    const html = renderReferenceChip({ title: 't', url: 'javascript:alert(1)' });
+    expect(html).toContain('href="#"');
+    expect(html).not.toContain('javascript:');
+  });
+});
+
+describe('escapeHtml single quotes', () => {
+  it('escapes single quotes to &#39;', () => {
+    expect(escapeHtml("it's")).toBe('it&#39;s');
+  });
+  it('existing test still passes (no single quote in original input)', () => {
+    expect(escapeHtml('<b>&"x"')).toBe('&lt;b&gt;&amp;&quot;x&quot;');
+  });
+});
+
+describe('renderMarkdown security', () => {
+  it('forged placeholder token does not produce "undefined" and contains no injected tag', () => {
+    // A user who types the raw placeholder token string must not cause "undefined" in output
+    const html = renderMarkdown('BLOCKPLACEHOLDER0BLOCKPLACEHOLDER');
+    expect(html).not.toContain('undefined');
+    expect(html).not.toContain('<');
+  });
+  it('renders italic with <em>', () => {
+    const html = renderMarkdown('*italic*');
+    expect(html).toContain('<em>italic</em>');
+  });
 });
