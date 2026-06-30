@@ -85,3 +85,13 @@ if (!manifest.key) {
 } else {
   console.log('using canonical manifest key (stable extension ID)');
 }
+
+// The source manifest.json carries the canonical CWS public key for a stable
+// unpacked extension ID (PR #114). The Chrome Web Store rejects a 'key' in the
+// published package, and CI's dist-check enforces this. Strip it from the
+// production dist; developers use source or `build:dev` for unpacked.
+if (manifest.key) {
+  delete manifest.key;
+  fs.writeFileSync(distManifest, JSON.stringify(manifest, null, 2));
+  console.log('stripped key from dist/manifest.json (CWS production)');
+}
