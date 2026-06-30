@@ -7,7 +7,8 @@
  *   xcsh.chat.conv.<id>    → Conversation
  */
 
-import type { ChatIndex, Conversation } from './references-store';
+import type { ChatIndex, Conversation, TabIndex } from './references-store';
+import { emptyTabIndex } from './references-store';
 
 export const INDEX_KEY = 'xcsh.chat.index';
 export function convKey(id: string): string {
@@ -36,4 +37,16 @@ export async function saveConversation(conv: Conversation): Promise<void> {
 
 export async function deleteConversations(ids: string[]): Promise<void> {
   if (ids.length) await chrome.storage.local.remove(ids.map(convKey));
+}
+
+export const TAB_INDEX_KEY = 'xcsh.chat.tabindex';
+
+export async function loadTabIndex(): Promise<TabIndex> {
+  const got = await chrome.storage.local.get(TAB_INDEX_KEY);
+  const idx = got[TAB_INDEX_KEY] as TabIndex | undefined;
+  return idx && typeof idx.byTab === 'object' ? idx : emptyTabIndex();
+}
+
+export async function saveTabIndex(index: TabIndex): Promise<void> {
+  await chrome.storage.local.set({ [TAB_INDEX_KEY]: index });
 }
