@@ -110,8 +110,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.3.0 (chat contract + agent prompt hints)', () => {
-    expect(CONTRACT_VERSION).toBe('1.3.0');
+  it('CONTRACT_VERSION is 1.4.0 (chat contract + prompt hints + query_dom/set_bridge_port)', () => {
+    expect(CONTRACT_VERSION).toBe('1.4.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {

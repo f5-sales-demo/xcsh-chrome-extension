@@ -20,7 +20,7 @@ import { Value } from '@sinclair/typebox/value';
 import { INTERACTION_MODES } from './chat-protocol';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.3.0';
+export const CONTRACT_VERSION = '1.4.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
