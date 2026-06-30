@@ -126,11 +126,11 @@ export function pruneConversations(index: ChatIndex, cap = CONV_CAP): { index: C
   return { index: { conversations, active }, removed };
 }
 
-export function setMode(conv: Conversation, mode: InteractionMode): Conversation {
+export function setMode(conv: Conversation, mode: InteractionMode, at: number): Conversation {
   return {
     ...conv,
     mode,
-    updatedAt: Date.now(),
+    updatedAt: at,
   };
 }
 

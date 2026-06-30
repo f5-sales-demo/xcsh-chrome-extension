@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { DEFAULT_MODE } from '../src/chat-protocol';
 import {
   addToIndex,
   appendAssistantDelta,
@@ -58,15 +59,14 @@ describe('pruneConversations', () => {
 describe('interaction modes and tool entries (addendum)', () => {
   it('creates conversation with DEFAULT_MODE', () => {
     const c = newConversation('conv-1', 1);
-    expect(c.mode).toBeDefined();
+    expect(c.mode).toBe(DEFAULT_MODE);
   });
 
   it('setMode updates mode and updatedAt', () => {
     let c = newConversation('conv-1', 1);
-    const beforeTime = c.updatedAt;
-    c = setMode(c, 'presentation');
+    c = setMode(c, 'presentation', 42);
     expect(c.mode).toBe('presentation');
-    expect(c.updatedAt).toBeGreaterThanOrEqual(beforeTime);
+    expect(c.updatedAt).toBe(42);
   });
 
   it('can create conversation with explicit mode', () => {
