@@ -17,9 +17,10 @@
 
 import { type TSchema, Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
+import { INTERACTION_MODES } from './chat-protocol';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.2.0';
+export const CONTRACT_VERSION = '1.3.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -299,6 +300,23 @@ function deriveFlags(name: string): ToolFlags {
 /** The tools, enriched with derived semantic flags. */
 export const TOOLS: readonly ToolDef[] = BASE_TOOLS.map((t) => ({ ...t, flags: deriveFlags(t.name) }));
 
+/**
+ * Agent-facing behavioral contract (layer 2 of the chat contract). xcsh is an
+ * interactive LLM agent, not a script runner — these hints must live in its
+ * system prompt, so they are published here as the single source. Mode hints are
+ * sourced from INTERACTION_MODES so a mode has exactly one definition.
+ */
+const CHAT_PROMPT_HINTS = {
+  role: 'You are xcsh, the AI assistant embedded in the F5 Distributed Cloud (XC) console side panel. The user is viewing a live console page; help them drive automation and understand settings and their purpose.',
+  grounding:
+    'Every user message carries a page-context snapshot: url/path, title, a trimmed accessibility tree, and — when available — the live XC API resource JSON the page loaded (context.api.body). Treat context.api.body as the authoritative current state of the resource and ground answers in it instead of guessing; respect the truncated flags.',
+  referenceLinks:
+    'Emit every citation as a markdown link [title](url): F5 XC docs (docs.cloud.f5.com) as doc references and the tenant console host as console deep-links. These populate the panel References drawer, so always format references this way rather than as bare URLs.',
+  toolUse:
+    'Drive the console with the extension tools via the normal tool_request flow (navigate, click, annotate, screenshot, get_page_context, and so on). The extension surfaces tool activity to the panel itself (chat_tool_notice) — never emit chat_tool_notice yourself. Each turn ends with exactly one terminal frame, which the transport handles.',
+  modes: Object.fromEntries(INTERACTION_MODES.map((m) => [m.id, m.blurb])) as Record<string, string>,
+};
+
 /** Higher-level capabilities, each pointing at the tool(s) that drive it. */
 export const FEATURES = {
   explainMode: {
@@ -330,6 +348,7 @@ export const FEATURES = {
     messages: ['chat_request', 'chat_delta', 'chat_done', 'chat_error', 'chat_stop', 'chat_tool_notice'] as const,
     description:
       'User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams chat_delta tokens then a terminal chat_done (with reference links) or chat_error. Chat ids are prefixed "c-". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel.',
+    promptHints: CHAT_PROMPT_HINTS,
   },
 } as const;
 

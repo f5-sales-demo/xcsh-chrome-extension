@@ -12,6 +12,7 @@
  * artifact stays lint-clean across regenerations.
  */
 
+import { CONTRACT_VERSION } from '../src/capabilities';
 import { CHAT_EXAMPLES, CHAT_SCHEMAS, PageContextSnapshotSchema } from '../src/chat-schema';
 import { formatBiomeJson } from './gen-capabilities';
 
@@ -19,7 +20,7 @@ export const CONFORMANCE_PATH = new URL('../chat-conformance.json', import.meta.
 
 export function renderConformance(): string {
   const schemas = { ...CHAT_SCHEMAS, page_context_snapshot: PageContextSnapshotSchema };
-  return `${formatBiomeJson({ contractVersion: '1.2.0', schemas, examples: CHAT_EXAMPLES })}\n`;
+  return `${formatBiomeJson({ contractVersion: CONTRACT_VERSION, schemas, examples: CHAT_EXAMPLES })}\n`;
 }
 
 if (import.meta.main) {

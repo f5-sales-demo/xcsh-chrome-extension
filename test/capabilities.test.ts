@@ -8,6 +8,7 @@ import {
   toolNames,
   validateToolParams,
 } from '../src/capabilities';
+import { INTERACTION_MODES } from '../src/chat-protocol';
 
 // The authoritative set of tools the extension dispatches (the `dispatchTool`
 // switch), plus the new `capabilities` discovery tool. The descriptor MUST cover
@@ -107,8 +108,32 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.2.0 (chat contract with modes + stop/notice)', () => {
-    expect(CONTRACT_VERSION).toBe('1.2.0');
+  it('CONTRACT_VERSION is 1.3.0 (chat contract + agent prompt hints)', () => {
+    expect(CONTRACT_VERSION).toBe('1.3.0');
+  });
+
+  it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {
+    const chat = (buildCapabilities('0.0.0').features as Record<string, unknown>).chat as {
+      modes: readonly string[];
+      promptHints?: {
+        role: string;
+        grounding: string;
+        referenceLinks: string;
+        toolUse: string;
+        modes: Record<string, string>;
+      };
+    };
+    const hints = chat.promptHints;
+    expect(hints).toBeDefined();
+    for (const k of ['role', 'grounding', 'referenceLinks', 'toolUse'] as const) {
+      expect(typeof hints?.[k]).toBe('string');
+      expect((hints?.[k] as string).length).toBeGreaterThan(0);
+    }
+    // Mode hints cover exactly the advertised modes and match the single source.
+    expect(Object.keys(hints?.modes ?? {}).sort()).toEqual([...chat.modes].sort());
+    for (const m of INTERACTION_MODES) {
+      expect(hints?.modes[m.id]).toBe(m.blurb);
+    }
   });
 
   it('every FEATURE points at a tool that exists', () => {
