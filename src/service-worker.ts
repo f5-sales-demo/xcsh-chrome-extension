@@ -11,6 +11,7 @@ import { buildCapabilities, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { runDispatch } from './dispatch';
+import { type BindingState, decideBinding, isConsoleUrl, isLinkStale } from './tab-binding';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const DEFAULT_BRIDGE_PORT = 19222;
@@ -137,6 +138,65 @@ let observingNetwork = false;
 // Chat: panel Ports keyed by chat-turn id ("c-…"), and the latest captured XC
 // API response per tab (ground-truth for the page-context snapshot).
 const turnToPort = new Map<string, chrome.runtime.Port>();
+
+// Connected chat side-panel Ports (for broadcasting tab/connection state).
+const chatPanels = new Set<chrome.runtime.Port>();
+// Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
+// busy" signal that locks the controlled tab against passive rebinding.
+let inFlightCount = 0;
+
+function isInFlight(): boolean {
+  return inFlightCount > 0 || turnToPort.size > 0;
+}
+function bindingState(): BindingState {
+  return { controlledTabId: targetTabId, inFlight: isInFlight() };
+}
+function broadcastToChatPanels(msg: unknown): void {
+  for (const p of chatPanels) {
+    try {
+      p.postMessage(msg);
+    } catch {
+      /* port closing — onDisconnect will clean up */
+    }
+  }
+}
+
+// --- Bridge heartbeat / fail-loud state ------------------------------------
+let lastActivityTs = 0;
+const LINK_STALE_MS = 45_000; // > the bridge ping cadence; open-but-silent ⇒ dead
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function pushStatus(connected: boolean, reason?: string): void {
+  broadcastToChatPanels({ type: 'status', connected, reason });
+}
+
+/** Fail every active chat turn loudly when the bridge link drops. */
+function failActiveTurns(error: string): void {
+  for (const [id, port] of [...turnToPort.entries()]) {
+    try {
+      port.postMessage({ type: 'chat_error', id, error });
+    } catch {
+      /* ignore */
+    }
+    turnToPort.delete(id);
+  }
+}
+
+function startHeartbeat(): void {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN && isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
+      pushStatus(false, 'stale');
+      failActiveTurns('bridge unresponsive');
+      try {
+        ws.close();
+      } catch {
+        /* onclose handles reconnect */
+      }
+    }
+  }, 15_000);
+}
+
 type ApiCapture = RawApiCapture & { mimeType?: string };
 const latestApiCapture = new Map<number, ApiCapture>();
 // Pending request bodies we want, awaiting Network.loadingFinished.
@@ -268,19 +328,29 @@ function scheduleFastReconnect(): void {
 function connect(): void {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
-    const sock = new WebSocket(getBridgeUrl());
+    const sock = new WebSocket(getBridgeUrl()); // #114 dynamic port — keep getBridgeUrl()
     ws = sock;
-    sock.onmessage = (ev) => onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+    sock.onopen = () => {
+      lastActivityTs = Date.now();
+      pushStatus(true);
+    };
+    sock.onmessage = (ev) => {
+      lastActivityTs = Date.now();
+      onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+    };
     sock.onclose = () => {
       // Only clear the shared ref if this socket is still the current one, then
       // re-attach quickly so a newly-started bridge's probe finds us.
       if (ws === sock) ws = null;
+      pushStatus(false, 'closed');
+      failActiveTurns('bridge disconnected');
       scheduleFastReconnect();
     };
     sock.onerror = () => {}; // onclose follows — reconnect is handled there.
   } catch {
     // WebSocket construction failed (e.g. bridge URL unreachable at startup).
     ws = null;
+    pushStatus(false, 'error');
     scheduleFastReconnect();
   }
 }
@@ -331,9 +401,26 @@ function onMessage(msg: any): void {
 // WebSocket `onclose` schedules a reconnect if the initial connect finds no
 // bridge, so no explicit post-connect retry is needed here.
 startKeepAlive();
+startHeartbeat();
 // Connect immediately on the default port; then async-read any stored override.
 // (Moving connect() inside the async callback broke MV3 SW suspension timing.)
 connect();
+// Bind the active console tab on startup so the panel has context without a prior navigate.
+chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
+});
+// Best-effort cleanup: remove any stale "xcsh" tab group left on background tabs
+// after a service-worker restart (those tabs are no longer the controlled target).
+chrome.tabGroups
+  .query({ title: 'xcsh' })
+  .then(async (groups) => {
+    for (const g of groups) {
+      const tabs = await chrome.tabs.query({ groupId: g.id }).catch(() => [] as chrome.tabs.Tab[]);
+      for (const t of tabs)
+        if (t.id !== undefined && t.id !== targetTabId) await chrome.tabs.ungroup([t.id]).catch(() => {});
+    }
+  })
+  .catch(() => {});
 chrome.storage.local.get('bridgePort', (data) => {
   if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
@@ -382,9 +469,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // --- Chat side panel Port --------------------------------------------------
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'xcsh-chat') return;
+  chatPanels.add(port);
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
+      if (ws?.readyState !== WebSocket.OPEN) {
+        port.postMessage({ type: 'chat_error', id: m.id, error: 'xcsh not connected — start the xcsh CLI' });
+        return;
+      }
       turnToPort.set(m.id, port);
       // Forward to the bridge as-is — buildChatRequest in the panel already
       // produces the correct shape (type 'chat_request', omitting history_hint
@@ -414,10 +506,17 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
   port.onDisconnect.addListener(() => {
+    chatPanels.delete(port);
     for (const [id, p] of turnToPort) if (p === port) turnToPort.delete(id);
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+  // Proactively bind the active console tab when the panel opens (idle only).
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
+      setControlledTab(tab.id).catch(() => {});
+    }
+  });
 });
 
 /** Stop the agent: detach the debugger and hide the on-page indicator. */
@@ -449,6 +548,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   const excludedFromNotice =
     tool === 'ping' || tool === 'capabilities' || tool === 'set_explain_mode' || tool === 'get_page_context';
   let ok = true;
+  inFlightCount++;
   try {
     const result = await dispatchTool(tool, params);
     return result;
@@ -456,6 +556,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
     ok = false;
     throw e;
   } finally {
+    inFlightCount--;
     if (broadcastsIndicator && targetTabId !== undefined) {
       chrome.tabs.sendMessage(targetTabId, { type: 'indicator_hide' }).catch(() => {});
     }
@@ -591,7 +692,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
 
   let tabId: number;
   if (reuseId !== undefined) {
-    targetTabId = reuseId;
+    await setControlledTab(reuseId);
     tabId = reuseId;
 
     // DEDUP: if the tab is already on the target URL, skip navigation entirely
@@ -626,7 +727,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     if (created.id === undefined) {
       throw new Error('navigate: failed to create console tab');
     }
-    targetTabId = created.id;
+    await setControlledTab(created.id);
     tabId = created.id;
   }
 
@@ -1341,10 +1442,42 @@ function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
   return { enabled: explainMode };
 }
 
+/**
+ * Set (or clear) the single controlled tab: ungroup the previous tab, attach the
+ * debugger, apply the red "xcsh" tab group, and notify the panel. Passing
+ * `undefined` unbinds. `navigate`, `login`, and `tabsCreate` all route through
+ * this function so the red group and panel session always stay in sync.
+ */
+async function setControlledTab(tabId: number | undefined): Promise<void> {
+  const prev = targetTabId;
+  if (prev !== undefined && prev !== tabId) {
+    await chrome.tabs.ungroup([prev]).catch(() => {});
+  }
+  targetTabId = tabId;
+  if (tabId === undefined) {
+    // Ungroup the previously-bound tab so no orphaned red group is left behind.
+    if (prev !== undefined) {
+      await chrome.tabs.ungroup([prev]).catch(() => {});
+    }
+    broadcastToChatPanels({ type: 'tab_unbound' });
+    return;
+  }
+  await ensureDebuggerAttached(tabId).catch(() => {});
+  try {
+    const gid = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(gid, { color: 'red', title: 'xcsh' });
+  } catch {
+    /* tabGroups can fail on some tab states — the binding still holds */
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url, title: tab?.title });
+}
+
 /** Build the page-context snapshot for the active console tab. */
 async function buildPageContext(): Promise<unknown> {
-  const tabId = requireTab();
-  await enableNetworkObserver(); // ensure future navigations are captured
+  const tabId = targetTabId;
+  if (tabId === undefined) return null; // no controlled console tab — panel shows inactive
+  await enableNetworkObserver();
   let url = '';
   let title = '';
   try {
@@ -1352,13 +1485,13 @@ async function buildPageContext(): Promise<unknown> {
     url = tab.url ?? '';
     title = tab.title ?? '';
   } catch {
-    /* tab vanished — fall through with empties */
+    /* tab vanished */
   }
   let ax: AxLike | null = null;
   try {
     ax = (await readAxFromTab()) as unknown as AxLike;
   } catch {
-    /* page still loading — snapshot without ax */
+    /* page still loading */
   }
   const api = latestApiCapture.get(tabId) ?? null;
   return buildContextSnapshot({ tabId, url, title, capturedAt: Date.now(), ax, api });
@@ -1947,7 +2080,7 @@ async function tabsCreate(params: { url: string }): Promise<{ tabId: number | un
     throw new Error(`tabs_create: url blocked by managed policy: ${url}`);
   }
   const tab = await chrome.tabs.create({ url, active: true });
-  if (tab.id !== undefined) targetTabId = tab.id;
+  if (tab.id !== undefined) await setControlledTab(tab.id);
   return { tabId: tab.id };
 }
 
@@ -2143,7 +2276,24 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
-// Clear a tab's capture when it closes.
-chrome.tabs.onRemoved.addListener((tabId) => {
+// --- Tab binding listeners -------------------------------------------------
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+  const a = decideBinding(bindingState(), { kind: 'activated', tabId, url: tab?.url });
+  if (a.action === 'bind') await setControlledTab(a.tabId);
+  else if (a.action === 'inactive') broadcastToChatPanels({ type: 'tab_inactive' });
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.url === undefined) return;
+  const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
+  if (a.action === 'unbind') await setControlledTab(undefined);
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
+  const a = decideBinding(bindingState(), { kind: 'removed', tabId });
+  if (a.action === 'unbind') await setControlledTab(undefined);
+  broadcastToChatPanels({ type: 'tab_closed', tabId }); // panel prunes that tab's session
 });
