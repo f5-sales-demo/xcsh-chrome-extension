@@ -9,7 +9,7 @@
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
 import { buildCapabilities, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
-import { buildContextSnapshot, type RawApiCapture } from './context-snapshot';
+import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { runDispatch } from './dispatch';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
@@ -307,6 +307,7 @@ function onMessage(msg: any): void {
           is_error: true,
         });
       });
+    return;
   }
 
   if (isChatInbound(msg)) {
@@ -438,7 +439,6 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   let ok = true;
   try {
     const result = await dispatchTool(tool, params);
-    ok = true;
     return result;
   } catch (e) {
     ok = false;
@@ -1290,9 +1290,9 @@ async function buildPageContext(): Promise<unknown> {
   } catch {
     /* tab vanished — fall through with empties */
   }
-  let ax: import('./context-snapshot').AxLike | null = null;
+  let ax: AxLike | null = null;
   try {
-    ax = (await readAxFromTab()) as unknown as import('./context-snapshot').AxLike;
+    ax = (await readAxFromTab()) as unknown as AxLike;
   } catch {
     /* page still loading — snapshot without ax */
   }
