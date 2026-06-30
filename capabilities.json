@@ -695,7 +695,7 @@
       "description": "Control the browser window size."
     },
     "chat": {
-      "tool": "get_page_context",
+      "contextTool": "get_page_context",
       "transport": "websocket-bridge",
       "modes": [
         "educational",

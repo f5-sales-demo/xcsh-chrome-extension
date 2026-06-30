@@ -324,7 +324,7 @@ export const FEATURES = {
     description: 'Control the browser window size.',
   },
   chat: {
-    tool: 'get_page_context',
+    contextTool: 'get_page_context',
     transport: 'websocket-bridge',
     modes: ['educational', 'presentation', 'configuration', 'screenshot', 'annotation'] as const,
     messages: ['chat_request', 'chat_delta', 'chat_done', 'chat_error', 'chat_stop', 'chat_tool_notice'] as const,

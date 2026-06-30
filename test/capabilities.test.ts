@@ -116,6 +116,7 @@ describe('capabilities — features & manifest', () => {
     expect(getToolDef(FEATURES.overlays.tool)).toBeDefined();
     expect(getToolDef(FEATURES.capture.tool)).toBeDefined();
     expect(getToolDef(FEATURES.viewport.tool)).toBeDefined();
+    expect(getToolDef(FEATURES.chat.contextTool)).toBeDefined();
   });
 
   it('overlays advertise the registered kinds', () => {
