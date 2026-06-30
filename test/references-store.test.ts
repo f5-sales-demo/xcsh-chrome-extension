@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'bun:test';
+import {
+  addToIndex,
+  appendAssistantDelta,
+  appendToolNotice,
+  appendUserMessage,
+  type ChatIndex,
+  CONV_CAP,
+  deriveTitle,
+  finalizeAssistant,
+  markAborted,
+  newConversation,
+  pruneConversations,
+  setMode,
+  startAssistant,
+} from '../src/references-store';
+
+describe('conversation lifecycle', () => {
+  it('titles from the first user message and streams an assistant reply', () => {
+    let c = newConversation('conv-1', 1);
+    c = appendUserMessage(c, { id: 'm1', role: 'user', text: 'How do I configure a WAF?', at: 2 });
+    expect(c.title).toBe(deriveTitle('How do I configure a WAF?'));
+    c = startAssistant(c, 'm2', 3);
+    c = appendAssistantDelta(c, 'm2', 'Open ');
+    c = appendAssistantDelta(c, 'm2', 'the LB.');
+    expect(c.messages[1].text).toBe('Open the LB.');
+  });
+
+  it('collects + dedupes references by url on finalize', () => {
+    let c = newConversation('conv-1', 1);
+    c = startAssistant(c, 'm1', 2);
+    c = finalizeAssistant(
+      c,
+      'm1',
+      [
+        { kind: 'doc', title: 'WAF', url: 'https://d/waf' },
+        { kind: 'doc', title: 'WAF dup', url: 'https://d/waf' },
+        { kind: 'console', title: 'Open', url: 'https://c/lb' },
+      ],
+      3,
+    );
+    expect(c.references).toHaveLength(2);
+    expect(c.messages[0].refs).toHaveLength(2);
+    expect(c.references.every((r) => r.firstSeenMsg === 'm1')).toBe(true);
+  });
+});
+
+describe('pruneConversations', () => {
+  it('drops oldest beyond the cap', () => {
+    let idx: ChatIndex = { conversations: [], active: null };
+    for (let i = 0; i < CONV_CAP + 3; i++) idx = addToIndex(idx, `conv-${i}`);
+    const { index, removed } = pruneConversations(idx);
+    expect(index.conversations).toHaveLength(CONV_CAP);
+    expect(removed).toEqual(['conv-0', 'conv-1', 'conv-2']);
+  });
+});
+
+describe('interaction modes and tool entries (addendum)', () => {
+  it('creates conversation with DEFAULT_MODE', () => {
+    const c = newConversation('conv-1', 1);
+    expect(c.mode).toBeDefined();
+  });
+
+  it('setMode updates mode and updatedAt', () => {
+    let c = newConversation('conv-1', 1);
+    const beforeTime = c.updatedAt;
+    c = setMode(c, 'presentation');
+    expect(c.mode).toBe('presentation');
+    expect(c.updatedAt).toBeGreaterThanOrEqual(beforeTime);
+  });
+
+  it('can create conversation with explicit mode', () => {
+    const c = newConversation('conv-1', 1, 'configuration');
+    expect(c.mode).toBe('configuration');
+  });
+
+  it('appendToolNotice appends a tool entry with minimal text', () => {
+    let c = newConversation('conv-1', 1);
+    c = appendToolNotice(c, { id: 't1', tool: 'waf-config', ok: true, at: 2 });
+    expect(c.messages).toHaveLength(1);
+    const msg = c.messages[0];
+    expect(msg.role).toBe('tool');
+    expect(msg.tool).toBe('waf-config');
+    expect(msg.ok).toBe(true);
+    expect(msg.text).toBe('waf-config: ok');
+  });
+
+  it('appendToolNotice with detail uses detail', () => {
+    let c = newConversation('conv-1', 1);
+    c = appendToolNotice(c, { id: 't1', tool: 'waf-config', ok: false, detail: 'Invalid JSON', at: 2 });
+    expect(c.messages[0].text).toBe('Invalid JSON');
+  });
+
+  it('markAborted sets aborted flag on assistant message', () => {
+    let c = newConversation('conv-1', 1);
+    c = startAssistant(c, 'm1', 2);
+    c = appendAssistantDelta(c, 'm1', 'Starting response...');
+    const beforeTime = c.updatedAt;
+    c = markAborted(c, 'm1', 5);
+    expect(c.messages[0].aborted).toBe(true);
+    expect(c.updatedAt).toBe(5);
+    expect(c.updatedAt).toBeGreaterThan(beforeTime);
+  });
+
+  it('markAborted does not affect other messages', () => {
+    let c = newConversation('conv-1', 1);
+    c = appendUserMessage(c, { id: 'u1', role: 'user', text: 'Hello', at: 2 });
+    c = startAssistant(c, 'a1', 3);
+    c = appendAssistantDelta(c, 'a1', 'Hi');
+    c = startAssistant(c, 'a2', 4);
+    c = appendAssistantDelta(c, 'a2', 'Another');
+    c = markAborted(c, 'a1', 5);
+    expect(c.messages[0].role).toBe('user');
+    expect(c.messages[0].aborted).toBeUndefined();
+    expect(c.messages[1].aborted).toBe(true);
+    expect(c.messages[2].aborted).toBeUndefined();
+  });
+});
