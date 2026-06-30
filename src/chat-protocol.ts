@@ -62,6 +62,7 @@ export function initChatTurn(id: string): ChatTurnState {
 
 /** Fold one inbound chat event into the turn state. Idempotent after terminal. */
 export function reduceChatTurn(state: ChatTurnState, msg: ChatInbound): ChatTurnState {
+  if (msg.id !== state.id) return state; // not this turn — ignore
   if (state.status !== 'streaming') return state; // terminal: ignore stragglers
   if (msg.type === 'chat_delta') {
     if (msg.seq <= state.lastSeq) return state; // duplicate / out-of-order
