@@ -456,10 +456,15 @@ function connectPort(port: number): void {
   if (manualPortPinned && port !== bridgePort) return; // pinned mode: only the pinned port may (re)connect
   const existing = sockets.get(port);
   if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
+  // Did THIS connection attempt ever open? A reconnect that never opens means the
+  // port is dead/gone — we must stop fast-reconnecting it (else a permanent ~1.5s
+  // storm) and let the 30s scan rediscover it if it returns.
+  let opened = false;
   try {
     const sock = new WebSocket(bridgeUrl(port));
     sockets.set(port, sock);
     sock.onopen = () => {
+      opened = true;
       lastActivityTs = Date.now();
       recordDiag('ws_open', { port });
       try {
@@ -476,22 +481,30 @@ function connectPort(port: number): void {
       onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data, port);
     };
     sock.onclose = () => {
-      // Was this a real bridge (connected before) or the pinned port? Those
-      // fast-reconnect; a never-open probe port is left to the discovery scan.
-      const wasKnown = knownPorts.has(port) || (manualPortPinned && port === bridgePort);
+      const isPinned = manualPortPinned && port === bridgePort;
       if (sockets.get(port) === sock) sockets.delete(port);
       registry.delete(port);
       recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
       if (!anyOpen()) failActiveTurns('bridge disconnected');
       broadcastBridges();
-      if (wasKnown) scheduleFastReconnect(port);
+      // The pinned port always keeps retrying. Otherwise: if this attempt never
+      // opened, the port is dead/gone — forget it (stops the storm; the 30s scan
+      // rediscovers it if it returns). A live known bridge that dropped gets ONE
+      // fast retry; if that retry fails to open, the next close forgets it.
+      if (isPinned) {
+        scheduleFastReconnect(port);
+        return;
+      }
+      if (!opened) knownPorts.delete(port);
+      if (knownPorts.has(port)) scheduleFastReconnect(port);
     };
     sock.onerror = () => {};
   } catch {
     sockets.delete(port);
     pushStatus(anyOpen(), 'error');
-    if (knownPorts.has(port) || (manualPortPinned && port === bridgePort)) scheduleFastReconnect(port);
+    if (manualPortPinned && port === bridgePort) scheduleFastReconnect(port);
+    else knownPorts.delete(port);
   }
 }
 
