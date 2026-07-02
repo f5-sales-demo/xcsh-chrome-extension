@@ -791,11 +791,17 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
     const p = params.port;
     if (!Number.isFinite(p) || p < 1024 || p > 65535) throw new Error('port must be 1024–65535');
     bridgePort = p;
-    manualPortPinned = true;
+    manualPortPinned = true; // pin: disables the range scan (parity with XCSH_BRIDGE_PORT)
     chrome.storage.local.set({ bridgePort: p });
-    // Close all existing sockets and reconnect on the new port.
-    for (const [, s] of sockets) { try { s.close(); } catch {} }
-    connectPort(bridgePort);
+    for (const [pt, s] of sockets) {
+      if (pt !== p) {
+        try { s.close(); } catch {}
+        sockets.delete(pt);
+        registry.delete(pt);
+      }
+    }
+    connectPort(p);
+    broadcastBridges();
     return { port: p, reconnecting: true };
   },
   reload: () => {
