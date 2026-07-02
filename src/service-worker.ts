@@ -7,7 +7,7 @@
  */
 
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
-import { type BridgeInfo, type BridgeRegistry, portCandidates, portForTenant, stalePorts } from './bridge-discovery';
+import { type BridgeInfo, type BridgeRegistry, liveTenants, portCandidates, portForTenant, stalePorts } from './bridge-discovery';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
@@ -411,7 +411,9 @@ function scheduleFastReconnect(port: number): void {
 }
 
 let manualPortPinned = false;
-function broadcastBridges(): void { /* E5 fills this in */ }
+function broadcastBridges(): void {
+  broadcastToChatPanels({ type: 'bridges', tenants: liveTenants(registry) });
+}
 
 const BRIDGE_SCAN_ALARM = 'bridge-scan';
 const BRIDGE_STALE_MS = 90_000; // > scan cadence; prune bridges gone silent
@@ -697,6 +699,7 @@ chrome.runtime.onConnect.addListener((port) => {
   // Also replay the current session identity (from the last hello_ack) so a panel
   // that connected AFTER the handshake still learns which tenant xcsh serves.
   port.postMessage({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+  port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
     if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
