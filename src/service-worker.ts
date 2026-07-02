@@ -182,6 +182,9 @@ let targetTabId: number | undefined;
 let sessionTenant: string | null = null;
 let sessionEnv: string | null = null;
 let sessionId: string | null = null;
+// Whether the connected xcsh worker has an active stored context (from hello_ack).
+// Contextless (false) means API-backed features are unavailable → panel shows a hint.
+let sessionContextBound = false;
 
 // Cached login credentials for session-expiry auto-recovery. Set by login(),
 // used by navigate() to transparently re-authenticate when the session expires.
@@ -623,8 +626,15 @@ function onMessage(msg: any, sourcePort: number): void {
     sessionTenant = info.tenant;
     sessionEnv = info.env;
     sessionId = info.sessionId;
+    sessionContextBound = msg.contextBound === true; // additive optional field; anything non-true → false
     if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
-    broadcastToChatPanels({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+    broadcastToChatPanels({
+      type: 'session_info',
+      tenant: sessionTenant,
+      env: sessionEnv,
+      sessionId,
+      contextBound: sessionContextBound,
+    });
     broadcastBridges();
     return;
   }
@@ -821,7 +831,13 @@ chrome.runtime.onConnect.addListener((port) => {
   port.postMessage({ type: 'status', connected: anyOpen() });
   // Also replay the current session identity (from the last hello_ack) so a panel
   // that connected AFTER the handshake still learns which tenant xcsh serves.
-  port.postMessage({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+  port.postMessage({
+    type: 'session_info',
+    tenant: sessionTenant,
+    env: sessionEnv,
+    sessionId,
+    contextBound: sessionContextBound,
+  });
   port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {

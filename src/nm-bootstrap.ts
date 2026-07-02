@@ -32,3 +32,14 @@ export function shouldProvision(
 export function hasNoRemainingTenantTab(remainingTenantKeys: string[], closedKey: string): boolean {
   return !remainingTenantKeys.includes(closedKey);
 }
+
+/**
+ * Should the panel show the contextless MOTD hint (guide the operator to run the
+ * `/context` wizard)? True iff an xcsh session is present for the focused tenant
+ * AND that worker is running contextless (`contextBound === false`, i.e. it has no
+ * active stored context so API-backed features are unavailable). Non-blocking:
+ * browser automation still works whether or not the hint is shown.
+ */
+export function shouldShowContextHint(sessionPresent: boolean, contextBound: boolean): boolean {
+  return sessionPresent && contextBound === false;
+}

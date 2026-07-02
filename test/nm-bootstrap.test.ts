@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { hasNoRemainingTenantTab, shouldProvision } from '../src/nm-bootstrap';
+import { hasNoRemainingTenantTab, shouldProvision, shouldShowContextHint } from '../src/nm-bootstrap';
 
 describe('nm-bootstrap: shouldProvision', () => {
   test('true when a tenant is focused, no bridge port, and not pinned', () => {
@@ -38,5 +38,20 @@ describe('nm-bootstrap: hasNoRemainingTenantTab', () => {
 
   test('false when the tenant appears among several remaining keys', () => {
     expect(hasNoRemainingTenantTab(['beta|production', 'alpha|staging'], 'alpha|staging')).toBe(false);
+  });
+});
+
+describe('nm-bootstrap: shouldShowContextHint', () => {
+  test('true when a session is present but the worker is contextless', () => {
+    expect(shouldShowContextHint(true, false)).toBe(true);
+  });
+
+  test('false when a session is present and the worker is context-bound', () => {
+    expect(shouldShowContextHint(true, true)).toBe(false);
+  });
+
+  test('false when there is no session, regardless of contextBound', () => {
+    expect(shouldShowContextHint(false, false)).toBe(false);
+    expect(shouldShowContextHint(false, true)).toBe(false);
   });
 });

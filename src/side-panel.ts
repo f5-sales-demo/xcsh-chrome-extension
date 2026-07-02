@@ -18,6 +18,7 @@ import {
   reduceChatTurn,
 } from './chat-protocol';
 import { renderMarkdown, renderReferenceChip } from './markdown-render';
+import { shouldShowContextHint } from './nm-bootstrap';
 import {
   appendAssistantDelta,
   appendToolNotice,
@@ -119,6 +120,24 @@ function setConnected(on: boolean): void {
     }
   } else if (banner) {
     banner.remove();
+  }
+}
+
+/** Show/hide a one-line, non-blocking MOTD hint nudging the operator to run the
+ * `/context` wizard when the connected worker is contextless. `tenant === null`
+ * hides it. Reuses the conn-banner insertion pattern (above the message list). */
+function setContextHint(tenant: string | null): void {
+  let hint = document.getElementById('context-hint');
+  if (tenant) {
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'context-hint';
+      hint.className = 'conn-banner';
+      messagesEl.parentElement?.insertBefore(hint, messagesEl);
+    }
+    hint.textContent = `No context for ${tenant} — run /context wizard to enable API features.`;
+  } else if (hint) {
+    hint.remove();
   }
 }
 
@@ -438,6 +457,10 @@ port.onMessage.addListener((m: unknown) => {
     const t = msg.tenant as string | null;
     const e = msg.env as string | null;
     connEl.title = t ? `xcsh session: ${t}${e ? ` (${e})` : ''}` : 'xcsh session: no active context';
+    // Contextless MOTD hint: a worker is present for this tenant but has no active
+    // stored context, so API-backed features are unavailable. Non-blocking — the
+    // operator can still drive the browser; this only nudges them to `/context`.
+    setContextHint(shouldShowContextHint(t !== null, msg.contextBound === true) ? t : null);
     return;
   }
 
