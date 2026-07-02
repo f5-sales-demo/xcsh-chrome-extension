@@ -649,7 +649,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'bridges_request') {
-    sendResponse({ bridges: [...registry.values()] });
+    // Only the extension's OWN pages (e.g. options) may enumerate bridges — never
+    // a content script on a tenant console page (that would be a cross-tenant leak).
+    const fromExtensionPage =
+      _sender?.id === chrome.runtime.id &&
+      (_sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/`) ?? false);
+    if (!fromExtensionPage) {
+      sendResponse({ bridges: [] });
+      return;
+    }
+    sendResponse({
+      bridges: [...registry.values()].map(({ sessionId, ...rest }) => ({
+        ...rest,
+        sessionId: sessionId ? sessionId.slice(-6) : null,
+      })),
+    });
     return; // synchronous response
   }
 
@@ -808,7 +822,13 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   read_console: readConsole,
   read_network: readNetwork,
   diag_suspension: diagSuspension,
-  diag_bridges: () => [...registry.values()],
+  // Read-only diagnostics for the agent — expose only a short sessionId suffix,
+  // never the full process id (tenant-isolation hardening).
+  diag_bridges: () =>
+    [...registry.values()].map(({ sessionId, ...rest }) => ({
+      ...rest,
+      sessionId: sessionId ? sessionId.slice(-6) : null,
+    })),
   capture_login_flow: captureLoginFlow,
   wait_for_api_response: waitForApiResponse,
   file_upload: fileUpload,
