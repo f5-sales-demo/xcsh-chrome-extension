@@ -7,6 +7,7 @@
  */
 
 import { isJsonMime, isXcResourceApi, resourceTypeFromUrl, shouldFetchBody } from './api-capture';
+import { type BridgeInfo, type BridgeRegistry } from './bridge-discovery';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
@@ -26,8 +27,8 @@ const DEFAULT_BRIDGE_PORT = 19222;
 /** Dynamic bridge port — settable via `set_bridge_port` tool or chrome.storage.local. */
 let bridgePort = DEFAULT_BRIDGE_PORT;
 
-function getBridgeUrl(): string {
-  return `ws://127.0.0.1:${bridgePort}`;
+function bridgeUrl(port: number): string {
+  return `ws://127.0.0.1:${port}`;
 }
 const MANAGED_POLICY_ALARM = 'managed-policy-refresh';
 const VERSION = '0.1.0';
@@ -104,7 +105,24 @@ function isKeycloakLoginUrl(u: string): boolean {
 
 // --- WebSocket bridge connection + lifecycle -------------------------------
 
-let ws: WebSocket | null = null;
+// Multi-port: one socket per discovered xcsh bridge, keyed by port.
+const sockets = new Map<number, WebSocket>();
+// Identity + liveness of each discovered bridge (from hello_ack + inbound traffic).
+const registry: BridgeRegistry = new Map();
+// The socket chat/automation currently routes over — the focused tab's tenant
+// when idle; pinned to a turn's origin while a turn is in flight (Task E4).
+let activePort: number | undefined;
+// Ports that connected at least once (a real bridge answered hello_ack) — only
+// these fast-reconnect on drop; never-open probe ports are left to the scan.
+const knownPorts = new Set<number>();
+// Per-port fast-reconnect timers (coalesced), replacing the single-socket timer.
+const fastReconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+/** Any bridge socket currently OPEN? (drives the panel's connection dot.) */
+function anyOpen(): boolean {
+  for (const s of sockets.values()) if (s.readyState === WebSocket.OPEN) return true;
+  return false;
+}
 
 // The console tab the SW is currently driving (set in `navigate`).
 let targetTabId: number | undefined;
@@ -176,15 +194,16 @@ chrome.storage.local
 
 /** Human-readable WebSocket state for diagnostics ('open'|'connecting'|'closed'|'none'). */
 function wsStateLabel(): string {
-  if (!ws) return 'none';
-  switch (ws.readyState) {
-    case WebSocket.OPEN:
-      return 'open';
-    case WebSocket.CONNECTING:
-      return 'connecting';
-    default:
-      return 'closed';
+  if (sockets.size === 0) return 'none';
+  for (const s of sockets.values()) {
+    switch (s.readyState) {
+      case WebSocket.OPEN:
+        return 'open';
+      case WebSocket.CONNECTING:
+        return 'connecting';
+    }
   }
+  return 'closed';
 }
 
 // MV3 suspension signals — Chrome fires onSuspend just before it kills the SW
@@ -200,6 +219,9 @@ chrome.runtime.onSuspendCanceled.addListener(() => recordDiag('suspend_canceled'
 // Chat: panel Ports keyed by chat-turn id ("c-…"), and the latest captured XC
 // API response per tab (ground-truth for the page-context snapshot).
 const turnToPort = new Map<string, chrome.runtime.Port>();
+// Which bridge port a turn was dispatched over (introduced fully in E4; declared
+// here so E2's onMessage delete path compiles).
+const turnToBridgePort = new Map<string, number>();
 
 // Connected chat side-panel Ports (for broadcasting tab/connection state).
 const chatPanels = new Set<chrome.runtime.Port>();
@@ -247,14 +269,11 @@ function failActiveTurns(error: string): void {
 function startHeartbeat(): void {
   if (heartbeatTimer) return;
   heartbeatTimer = setInterval(() => {
-    if (ws?.readyState === WebSocket.OPEN && isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
+    if (!anyOpen()) return;
+    if (isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
       pushStatus(false, 'stale');
       failActiveTurns('bridge unresponsive');
-      try {
-        ws.close();
-      } catch {
-        /* onclose handles reconnect */
-      }
+      for (const s of sockets.values()) { try { s.close(); } catch { /* onclose reconnects */ } }
     }
   }, 15_000);
 }
@@ -374,106 +393,128 @@ function startKeepAlive(): void {
 // Fast-reconnect: when the WebSocket closes (e.g. xcsh's bridge stopped, or no
 // bridge was listening yet), retry on a fixed short interval. Because the SW is
 // kept alive above, this keeps retrying so the extension re-attaches whenever a
-// bridge next appears. WebSocket `onclose` drives reconnection; the timer is a
-// single in-flight retry, coalesced so overlapping closes don't stack timers.
+// bridge next appears. WebSocket `onclose` drives reconnection; per-port timers
+// are coalesced so overlapping closes on the same port don't stack timers.
 const RECONNECT_DELAY_MS = 1500;
-let fastReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-function scheduleFastReconnect(): void {
-  if (fastReconnectTimer) return;
-  fastReconnectTimer = setTimeout(() => {
-    fastReconnectTimer = null;
-    if (ws?.readyState === WebSocket.OPEN) return;
-    connect();
+/** Fast-reconnect one bridge port (~1.5s), coalesced so overlapping closes on
+ * the same port don't stack timers. Used only for a known bridge that dropped. */
+function scheduleFastReconnect(port: number): void {
+  if (fastReconnectTimers.has(port)) return;
+  const timer = setTimeout(() => {
+    fastReconnectTimers.delete(port);
+    if (sockets.get(port)?.readyState === WebSocket.OPEN) return;
+    connectPort(port);
   }, RECONNECT_DELAY_MS);
+  fastReconnectTimers.set(port, timer);
 }
 
-function connect(): void {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+let manualPortPinned = false;
+function broadcastBridges(): void { /* E5 fills this in */ }
+
+function connectPort(port: number): void {
+  const existing = sockets.get(port);
+  if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
   try {
-    const sock = new WebSocket(getBridgeUrl()); // #114 dynamic port — keep getBridgeUrl()
-    ws = sock;
+    const sock = new WebSocket(bridgeUrl(port));
+    sockets.set(port, sock);
     sock.onopen = () => {
       lastActivityTs = Date.now();
-      recordDiag('ws_open', { port: bridgePort });
-      // Identity handshake (Phase 1): ask which tenant this xcsh process serves.
+      recordDiag('ws_open', { port });
       try {
         sock.send(JSON.stringify({ type: 'hello', contractVersion: CONTRACT_VERSION, extensionId: chrome.runtime.id }));
       } catch {
         /* socket may have dropped immediately */
       }
-      pushStatus(true);
+      pushStatus(anyOpen());
     };
     sock.onmessage = (ev) => {
       lastActivityTs = Date.now();
-      onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data);
+      const info = registry.get(port);
+      if (info) info.lastSeen = lastActivityTs;
+      onMessage(typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data, port);
     };
     sock.onclose = () => {
-      // Only clear the shared ref if this socket is still the current one, then
-      // re-attach quickly so a newly-started bridge's probe finds us.
-      if (ws === sock) ws = null;
-      recordDiag('ws_close', { port: bridgePort });
-      pushStatus(false, 'closed');
-      failActiveTurns('bridge disconnected');
-      scheduleFastReconnect();
+      // Was this a real bridge (connected before) or the pinned port? Those
+      // fast-reconnect; a never-open probe port is left to the discovery scan.
+      const wasKnown = knownPorts.has(port) || (manualPortPinned && port === bridgePort);
+      if (sockets.get(port) === sock) sockets.delete(port);
+      registry.delete(port);
+      recordDiag('ws_close', { port });
+      pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
+      if (!anyOpen()) failActiveTurns('bridge disconnected');
+      broadcastBridges();
+      if (wasKnown) scheduleFastReconnect(port);
     };
-    sock.onerror = () => {}; // onclose follows — reconnect is handled there.
+    sock.onerror = () => {};
   } catch {
-    // WebSocket construction failed (e.g. bridge URL unreachable at startup).
-    ws = null;
-    pushStatus(false, 'error');
-    scheduleFastReconnect();
+    sockets.delete(port);
+    pushStatus(anyOpen(), 'error');
+    if (knownPorts.has(port) || (manualPortPinned && port === bridgePort)) scheduleFastReconnect(port);
   }
 }
 
-/** Send a JSON message to the bridge if the socket is open. */
-function send(msg: unknown): void {
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+/** Send a JSON frame to a specific bridge socket if open. */
+function sendTo(port: number | undefined, msg: unknown): boolean {
+  if (port === undefined) return false;
+  const s = sockets.get(port);
+  if (s?.readyState === WebSocket.OPEN) {
+    s.send(JSON.stringify(msg));
+    return true;
+  }
+  return false;
+}
+
+/** Send over the active (focused-tenant) socket. */
+function sendActive(msg: unknown): boolean {
+  return sendTo(activePort, msg);
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: bridge message shape
-function onMessage(msg: any): void {
+function onMessage(msg: any, sourcePort: number): void {
   if (!msg || typeof msg !== 'object') return;
 
   if (msg.type === 'ping') {
-    send({ type: 'pong' });
+    sendTo(sourcePort, { type: 'pong' });
     return;
   }
 
-  // Phase 1: the bridge's answer to our `hello` — which tenant this xcsh process
-  // serves. Store it and tell the panel so it can show/confirm the tenant.
+  // Identity handshake reply — record which tenant this bridge (port) serves.
   if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
-    sessionTenant = (msg.tenant as string | null) ?? null;
-    sessionEnv = (msg.env as string | null) ?? null;
-    sessionId = (msg.sessionId as string | null) ?? null;
+    const info: BridgeInfo = {
+      port: sourcePort,
+      tenant: (msg.tenant as string | null) ?? null,
+      env: (msg.env as string | null) ?? null,
+      sessionId: (msg.sessionId as string | null) ?? null,
+      lastSeen: Date.now(),
+    };
+    registry.set(sourcePort, info);
+    knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
+    // Legacy single-session mirror (still used by the connection-dot tooltip).
+    sessionTenant = info.tenant;
+    sessionEnv = info.env;
+    sessionId = info.sessionId;
+    if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
     broadcastToChatPanels({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
+    broadcastBridges();
     return;
   }
 
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
     runTool(tool, params)
-      .then((content) => {
-        send({ type: 'tool_result', id, content, is_error: false });
-      })
-      .catch((e) => {
-        send({
-          type: 'tool_result',
-          id,
-          content: String(e),
-          is_error: true,
-        });
-      });
+      .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
+      .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
   }
 
   if (isChatInbound(msg)) {
     const port = turnToPort.get(msg.id);
     port?.postMessage(msg);
-    // Only delete on genuinely terminal messages — chat_tool_notice is
-    // non-terminal (more deltas/done/error follow), so deleting there would
-    // orphan the turn and drop all subsequent messages.
-    if (msg.type === 'chat_done' || msg.type === 'chat_error') turnToPort.delete(msg.id);
+    if (msg.type === 'chat_done' || msg.type === 'chat_error') {
+      turnToPort.delete(msg.id);
+      turnToBridgePort.delete(msg.id);
+    }
     return;
   }
 }
@@ -484,8 +525,8 @@ function onMessage(msg: any): void {
 startKeepAlive();
 startHeartbeat();
 // Connect immediately on the default port; then async-read any stored override.
-// (Moving connect() inside the async callback broke MV3 SW suspension timing.)
-connect();
+// (Moving connectPort() inside the async callback broke MV3 SW suspension timing.)
+connectPort(bridgePort);
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
   if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
@@ -505,7 +546,9 @@ chrome.tabGroups
 chrome.storage.local.get('bridgePort', (data) => {
   if (typeof data?.bridgePort === 'number' && data.bridgePort >= 1024 && data.bridgePort !== bridgePort) {
     bridgePort = data.bridgePort;
-    if (ws) ws.close(); // reconnect on the stored port
+    manualPortPinned = true;
+    for (const [p, s] of sockets) { if (p !== bridgePort) { try { s.close(); } catch {} } }
+    connectPort(bridgePort);
   }
 });
 // Open the side panel when the toolbar icon is clicked (requires an `action`
@@ -552,7 +595,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return;
 
   if (msg.type === 'status_request') {
-    sendResponse({ connected: ws?.readyState === WebSocket.OPEN });
+    sendResponse({ connected: anyOpen() });
     return; // synchronous response
   }
 
@@ -569,7 +612,7 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
-      if (ws?.readyState !== WebSocket.OPEN) {
+      if (!anyOpen()) {
         port.postMessage({ type: 'chat_error', id: m.id, error: 'xcsh not connected — start the xcsh CLI' });
         return;
       }
@@ -577,13 +620,13 @@ chrome.runtime.onConnect.addListener((port) => {
       // Forward to the bridge as-is — buildChatRequest in the panel already
       // produces the correct shape (type 'chat_request', omitting history_hint
       // when absent). No reconstruction needed.
-      send(m);
+      sendActive(m);
       return;
     }
     if (m.type === 'chat_stop') {
       // Forward stop to the bridge; do NOT delete the turn port — the bridge sends
       // a terminal chat_done/chat_error that the existing inbound routing handles.
-      send({ type: 'chat_stop', id: m.id });
+      sendActive({ type: 'chat_stop', id: m.id });
       return;
     }
     if (m.type === 'get_page_context') {
@@ -597,7 +640,7 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'status_request') {
-      port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+      port.postMessage({ type: 'status', connected: anyOpen() });
       return;
     }
   });
@@ -606,7 +649,7 @@ chrome.runtime.onConnect.addListener((port) => {
     for (const [id, p] of turnToPort) if (p === port) turnToPort.delete(id);
   });
   // Greet with current connection status so the panel can render its dot.
-  port.postMessage({ type: 'status', connected: ws?.readyState === WebSocket.OPEN });
+  port.postMessage({ type: 'status', connected: anyOpen() });
   // Also replay the current session identity (from the last hello_ack) so a panel
   // that connected AFTER the handshake still learns which tenant xcsh serves.
   port.postMessage({ type: 'session_info', tenant: sessionTenant, env: sessionEnv, sessionId });
@@ -682,9 +725,11 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
     const p = params.port;
     if (!Number.isFinite(p) || p < 1024 || p > 65535) throw new Error('port must be 1024–65535');
     bridgePort = p;
+    manualPortPinned = true;
     chrome.storage.local.set({ bridgePort: p });
-    // Close and reconnect on the new port.
-    if (ws) ws.close();
+    // Close all existing sockets and reconnect on the new port.
+    for (const [, s] of sockets) { try { s.close(); } catch {} }
+    connectPort(bridgePort);
     return { port: p, reconnecting: true };
   },
   reload: () => {
