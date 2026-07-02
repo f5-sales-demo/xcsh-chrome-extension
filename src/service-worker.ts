@@ -504,11 +504,6 @@ function sendTo(port: number | undefined, msg: unknown): boolean {
   return false;
 }
 
-/** Send over the active (focused-tenant) socket. */
-function sendActive(msg: unknown): boolean {
-  return sendTo(activePort, msg);
-}
-
 // biome-ignore lint/suspicious/noExplicitAny: bridge message shape
 function onMessage(msg: any, sourcePort: number): void {
   if (!msg || typeof msg !== 'object') return;
