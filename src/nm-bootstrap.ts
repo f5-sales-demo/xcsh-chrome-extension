@@ -43,3 +43,24 @@ export function hasNoRemainingTenantTab(remainingTenantKeys: string[], closedKey
 export function shouldShowContextHint(sessionPresent: boolean, contextBound: boolean): boolean {
   return sessionPresent && contextBound === false;
 }
+
+/**
+ * Which tenant (session key) the panel should show the contextless MOTD hint for,
+ * derived from the FOCUSED tab's tenant and the live-bridge list — NOT the SW's
+ * global single-session mirror (which reflects the last worker to ack, so under
+ * multi-tenant a background contextless worker would wrongly flag the focused,
+ * fully context-bound tenant). Returns the active tenant key iff it has a live
+ * bridge whose worker is contextless (`contextBound !== true`); otherwise null
+ * (context-bound, no focused tenant, or the tenant has no live bridge → the
+ * disconnect case, which naturally clears any previously-shown hint). Reuses
+ * `shouldShowContextHint` for the boolean decision.
+ */
+export function contextHintTenant(
+  activeTenantKey: string | null,
+  tenants: Array<{ tenant: string; contextBound?: boolean }>,
+): string | null {
+  if (!activeTenantKey) return null;
+  const entry = tenants.find((t) => t.tenant === activeTenantKey);
+  if (!entry) return null;
+  return shouldShowContextHint(true, entry.contextBound === true) ? activeTenantKey : null;
+}

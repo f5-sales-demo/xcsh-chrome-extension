@@ -618,6 +618,7 @@ function onMessage(msg: any, sourcePort: number): void {
       tenant: (msg.tenant as string | null) ?? null,
       env: (msg.env as string | null) ?? null,
       sessionId: (msg.sessionId as string | null) ?? null,
+      contextBound: msg.contextBound === true, // additive optional field; anything non-true → false
       lastSeen: Date.now(),
     };
     registry.set(sourcePort, info);
@@ -626,7 +627,7 @@ function onMessage(msg: any, sourcePort: number): void {
     sessionTenant = info.tenant;
     sessionEnv = info.env;
     sessionId = info.sessionId;
-    sessionContextBound = msg.contextBound === true; // additive optional field; anything non-true → false
+    sessionContextBound = info.contextBound;
     if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
     broadcastToChatPanels({
       type: 'session_info',
