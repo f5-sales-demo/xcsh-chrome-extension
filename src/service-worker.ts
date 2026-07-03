@@ -175,9 +175,9 @@ function clearPortForTab(tabId: number): void {
 
 // --- Native-messaging bootstrap (auto-provisioning) ------------------------
 // A single native-messaging port to the xcsh chrome-host. When a focused tenant
-// tab has no bridge, we `provision {tenantKey}` and the manager spawns a worker
-// on a range port; the Phase-3 scan then discovers it and routes. When a
-// tenant's last tab closes, we `release {tenantKey}` so the manager reaps it.
+// tab has no bridge, we `provision {sessionId, tenant}` and the manager spawns a
+// worker on a range port; the Phase-3 scan then discovers it and routes. When a
+// tenant's last tab closes, we `release {sessionId}` so the manager reaps it.
 const NM_HOST = 'com.xcsh.xcsh.chrome_host';
 let nmPort: chrome.runtime.Port | null = null;
 function ensureNativeHost(): chrome.runtime.Port | null {
@@ -741,7 +741,16 @@ else scanRange();
 ensureNativeHost();
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
+  if (tab?.id !== undefined && isConsoleUrl(tab.url)) {
+    setControlledTab(tab.id).catch(() => {});
+    // setControlledTab only sets targetTabId; it does NOT re-pin activePort. Since
+    // activePort is otherwise set only-when-undefined at the earliest hello_ack, a
+    // cold-start / SW-restart with two workers (and no intervening tab switch) would
+    // leave activePort on the wrong worker → the first chat turn drives the wrong
+    // tab. Resync it to the FOCUSED tab's worker (mirrors onActivated's derivation).
+    const key = sessionKeyFromUrl(tab.url);
+    setActiveTenant(key ? sessionKeyStr(key) : null, tab.id);
+  }
 });
 // Best-effort cleanup: remove any stale "xcsh" tab group left on background tabs
 // after a service-worker restart (those tabs are no longer the controlled target).
@@ -909,8 +918,14 @@ chrome.runtime.onConnect.addListener((port) => {
   port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
-      setControlledTab(tab.id).catch(() => {});
+    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url)) {
+      if (tab.id !== targetTabId) setControlledTab(tab.id).catch(() => {});
+      // setControlledTab only sets targetTabId; re-pin activePort to the FOCUSED
+      // tab's worker too (mirrors onActivated), so a panel opening after a cold
+      // start / SW-restart routes the first turn to the focused tab — not to the
+      // earliest-ack worker that activePort was pinned to only-when-undefined.
+      const key = sessionKeyFromUrl(tab.url);
+      setActiveTenant(key ? sessionKeyStr(key) : null, tab.id);
     }
   });
 });

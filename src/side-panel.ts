@@ -524,7 +524,13 @@ port.onMessage.addListener((m: unknown) => {
   }
 
   if (msg.type === 'tab_closed') {
-    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
+    // One panel per window serves many tabs — only abort the in-flight turn when
+    // the CLOSED tab is the one this panel is driving. Closing an unrelated
+    // console tab must not blank a turn shown for a different (bound) tab.
+    // Transcript cleanup stays UNCONDITIONAL: prune the closed tab's session either way.
+    if ((msg.tabId as number) === boundTabId) {
+      abortActiveTurn('Tab changed — chat ended. Resend to continue.');
+    }
     pruneTabSession(msg.tabId as number).catch(() => {});
     return;
   }
