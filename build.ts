@@ -34,7 +34,7 @@ await Bun.build({
 });
 
 await Bun.build({
-  entrypoints: ['src/side-panel.ts'],
+  entrypoints: ['src/side-panel.tsx'],
   outdir: 'dist',
   target: 'browser',
   minify: false,
@@ -63,6 +63,9 @@ fs.mkdirSync('dist/icons', { recursive: true });
 for (const s of [16, 48, 128]) {
   fs.copyFileSync(`icons/icon-${s}.png`, `dist/icons/icon-${s}.png`);
 }
+
+const sz = fs.statSync('dist/side-panel.js').size;
+console.log(`side-panel.js: ${(sz / 1024).toFixed(1)} KB`);
 
 // Regenerate the published capability contract from the single-source descriptor
 // (src/capabilities.ts) so capabilities.json never drifts from the code.
