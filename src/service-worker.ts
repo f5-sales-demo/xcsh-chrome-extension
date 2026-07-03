@@ -20,7 +20,7 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { hasNoRemainingTenantTab, shouldProvision } from './nm-bootstrap';
+import { portForTab, resolveToolTab, sidForTab } from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -126,12 +126,58 @@ let activePort: number | undefined;
 const knownPorts = new Set<number>();
 // Per-port fast-reconnect timers (coalesced), replacing the single-socket timer.
 const fastReconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
+// sourcePort → tabId: the tab each worker socket is BOUND to. Derived from the
+// worker's per-tab sid (hello_ack.sessionId === sidForTab(tabId)) and validated
+// against a live tab, so a `tool_request` routes to that worker's OWN tab and
+// never a fallback. Recomputable (no persistence): rebuilt as hello_acks arrive;
+// entries are cleared when the socket closes or the tab is removed.
+const portToTab = new Map<number, number>();
+
+/** Correlate a worker socket to the tab its per-tab sid names, but ONLY if that
+ *  tab is currently open — so we never bind a port to a dead tab. `sid` is
+ *  `sidForTab(tabId)` (`"tab-<id>"`); parse the id, then confirm the tab exists. */
+function correlatePortToTab(sourcePort: number, sid: string | null): void {
+  if (!sid) return;
+  const m = /^tab-(\d+)$/.exec(sid);
+  if (!m) return;
+  const tabId = Number(m[1]);
+  if (sid !== sidForTab(tabId)) return; // sanity: parsed id must round-trip
+  // Authoritative open-tab check; a tracked tenant tab is the fast path.
+  if (tabSessionKeys.has(tabId)) {
+    portToTab.set(sourcePort, tabId);
+    return;
+  }
+  chrome.tabs.get(tabId).then(
+    (t) => {
+      // Re-check liveness + identity: the `get` was async, so the socket may have
+      // closed (onclose ran portToTab.delete) or the port may have been reused by
+      // a different session in the interim. Only bind if this is still the same
+      // OPEN connection that advertised this sid — otherwise a late stale insert
+      // could misroute a different worker's tool_request until it re-correlates.
+      if (
+        t?.id === tabId &&
+        sockets.get(sourcePort)?.readyState === WebSocket.OPEN &&
+        registry.get(sourcePort)?.sessionId === sid
+      ) {
+        portToTab.set(sourcePort, tabId);
+      }
+    },
+    () => {
+      /* tab gone — leave this port unbound so tool_request refuses */
+    },
+  );
+}
+
+/** Drop any portToTab entry that maps to `tabId` (tab closed / re-tenanted). */
+function clearPortForTab(tabId: number): void {
+  for (const [port, t] of portToTab) if (t === tabId) portToTab.delete(port);
+}
 
 // --- Native-messaging bootstrap (auto-provisioning) ------------------------
 // A single native-messaging port to the xcsh chrome-host. When a focused tenant
-// tab has no bridge, we `provision {tenantKey}` and the manager spawns a worker
-// on a range port; the Phase-3 scan then discovers it and routes. When a
-// tenant's last tab closes, we `release {tenantKey}` so the manager reaps it.
+// tab has no bridge, we `provision {sessionId, tenant}` and the manager spawns a
+// worker on a range port; the Phase-3 scan then discovers it and routes. When a
+// tenant's last tab closes, we `release {sessionId}` so the manager reaps it.
 const NM_HOST = 'com.xcsh.xcsh.chrome_host';
 let nmPort: chrome.runtime.Port | null = null;
 function ensureNativeHost(): chrome.runtime.Port | null {
@@ -348,17 +394,15 @@ const pendingApi = new Map<
   { tabId: number; url: string; status: number; resourceType: string | null; mimeType?: string }
 >();
 
-async function enableConsoleObserver(): Promise<void> {
+async function enableConsoleObserver(tabId: number): Promise<void> {
   if (observingConsole) return;
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable', {});
   observingConsole = true;
 }
 
-async function enableNetworkObserver(): Promise<void> {
+async function enableNetworkObserver(tabId: number): Promise<void> {
   if (observingNetwork) return;
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {});
   observingNetwork = true;
@@ -508,16 +552,26 @@ function ensureTenantSocket(sessionKey: string | null): void {
   if (portForTenant(registry, sessionKey) === undefined) scanRange();
 }
 
-/** Point the active socket at a tenant's bridge — only when idle, so an
- * in-flight turn keeps routing to the socket it started on (Phase-3 pinning). */
-function setActiveTenant(sessionKey: string | null): void {
+/** Point the active socket at the FOCUSED tab's own worker — only when idle, so
+ * an in-flight turn keeps routing to the socket it started on (Phase-3 pinning).
+ * Per-tab: provisioning and activePort are keyed by the tab's sid, not the
+ * tenant, so two tabs of the same tenant each get their own worker. */
+function setActiveTenant(sessionKey: string | null, tabId?: number): void {
   if (isInFlight() || turnToPort.size > 0) return; // a turn owns routing
   ensureTenantSocket(sessionKey);
-  activePort = portForTenant(registry, sessionKey);
-  // No bridge for the focused tenant → ask the manager to spawn a worker; the
-  // scan (already kicked by ensureTenantSocket) discovers its port and routes.
-  if (shouldProvision(sessionKey, activePort, manualPortPinned)) {
-    nmSend({ type: 'provision', tenantKey: sessionKey });
+  // The active socket is the focused tab's OWN worker (fall back to the tenant
+  // lookup only when no tab id is available, e.g. legacy callers).
+  activePort = tabId !== undefined ? portForTab(registry, sidForTab(tabId)) : portForTenant(registry, sessionKey);
+  // No worker for the focused tab → ask the manager to spawn one keyed by the
+  // tab's sid; the scan discovers its port and routes.
+  if (
+    tabId !== undefined &&
+    sessionKey !== null &&
+    sessionKey !== '' &&
+    !manualPortPinned &&
+    portForTab(registry, sidForTab(tabId)) === undefined
+  ) {
+    nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
   }
 }
 
@@ -553,6 +607,7 @@ function connectPort(port: number): void {
       const isPinned = manualPortPinned && port === bridgePort;
       if (sockets.get(port) === sock) sockets.delete(port);
       registry.delete(port);
+      portToTab.delete(port); // this worker's tab binding dies with its socket
       recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
       if (!anyOpen()) failActiveTurns('bridge disconnected');
@@ -622,6 +677,9 @@ function onMessage(msg: any, sourcePort: number): void {
       lastSeen: Date.now(),
     };
     registry.set(sourcePort, info);
+    // Bind this worker socket to the tab its per-tab sid names (validated open),
+    // so tool_request from this port dispatches to that worker's OWN tab.
+    correlatePortToTab(sourcePort, info.sessionId);
     knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
     // Legacy single-session mirror (still used by the connection-dot tooltip).
     sessionTenant = info.tenant;
@@ -642,7 +700,16 @@ function onMessage(msg: any, sourcePort: number): void {
 
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
-    runTool(tool, params)
+    // THE fix: dispatch to the tab BOUND to this worker's socket — never the
+    // global targetTabId. An unbound source (no live hello_ack correlation) is
+    // refused, so a worker can only ever drive its own tab.
+    const boundTab = resolveToolTab(sourcePort, portToTab);
+    if (boundTab === null) {
+      sendTo(sourcePort, { type: 'tool_result', id, content: 'no bound tab for this session', is_error: true });
+      return;
+    }
+    Promise.resolve()
+      .then(() => runTool(tool, params, boundTab))
       .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
       .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
@@ -674,7 +741,16 @@ else scanRange();
 ensureNativeHost();
 // Bind the active console tab on startup so the panel has context without a prior navigate.
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  if (tab?.id !== undefined && isConsoleUrl(tab.url)) setControlledTab(tab.id).catch(() => {});
+  if (tab?.id !== undefined && isConsoleUrl(tab.url)) {
+    setControlledTab(tab.id).catch(() => {});
+    // setControlledTab only sets targetTabId; it does NOT re-pin activePort. Since
+    // activePort is otherwise set only-when-undefined at the earliest hello_ack, a
+    // cold-start / SW-restart with two workers (and no intervening tab switch) would
+    // leave activePort on the wrong worker → the first chat turn drives the wrong
+    // tab. Resync it to the FOCUSED tab's worker (mirrors onActivated's derivation).
+    const key = sessionKeyFromUrl(tab.url);
+    setActiveTenant(key ? sessionKeyStr(key) : null, tab.id);
+  }
 });
 // Best-effort cleanup: remove any stale "xcsh" tab group left on background tabs
 // after a service-worker restart (those tabs are no longer the controlled target).
@@ -806,13 +882,13 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'get_page_context') {
-      buildPageContext()
+      buildPageContext(targetTabId)
         .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
         .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
       return;
     }
     if (m.type === 'chat_annotate') {
-      chatAnnotate(m).catch(() => {});
+      chatAnnotate(m, targetTabId).catch(() => {});
       return;
     }
     if (m.type === 'status_request') {
@@ -842,8 +918,14 @@ chrome.runtime.onConnect.addListener((port) => {
   port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url) && tab.id !== targetTabId) {
-      setControlledTab(tab.id).catch(() => {});
+    if (!isInFlight() && tab?.id !== undefined && isConsoleUrl(tab.url)) {
+      if (tab.id !== targetTabId) setControlledTab(tab.id).catch(() => {});
+      // setControlledTab only sets targetTabId; re-pin activePort to the FOCUSED
+      // tab's worker too (mirrors onActivated), so a panel opening after a cold
+      // start / SW-restart routes the first turn to the focused tab — not to the
+      // earliest-ack worker that activePort was pinned to only-when-undefined.
+      const key = sessionKeyFromUrl(tab.url);
+      setActiveTenant(key ? sessionKeyStr(key) : null, tab.id);
     }
   });
 });
@@ -851,7 +933,7 @@ chrome.runtime.onConnect.addListener((port) => {
 /** Stop the agent: detach the debugger and hide the on-page indicator. */
 function stopAgent(): void {
   if (targetTabId !== undefined) {
-    detach().catch(() => {});
+    detach(undefined, targetTabId).catch(() => {});
   }
   // Hide the visual indicator on all scoped console tabs.
   chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS }).then((tabs) => {
@@ -866,12 +948,15 @@ function stopAgent(): void {
 // --- Tool implementations --------------------------------------------------
 
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function runTool(tool: string, params: any): Promise<unknown> {
+async function runTool(tool: string, params: any, tabId?: number): Promise<unknown> {
   // Pulse the on-page indicator while any non-trivial tool runs. `ping`,
   // `capabilities`, and `set_explain_mode` take no page action, so they stay silent.
   const broadcastsIndicator = tool !== 'ping' && tool !== 'capabilities' && tool !== 'set_explain_mode';
-  if (broadcastsIndicator && targetTabId !== undefined) {
-    chrome.tabs.sendMessage(targetTabId, { type: 'indicator_show' }).catch(() => {});
+  // Target the BOUND tab for this dispatch (falls back to the global only for
+  // callers that pass no tab), so the indicator pulses on the worker's own tab.
+  const indicatorTab = tabId ?? targetTabId;
+  if (broadcastsIndicator && indicatorTab !== undefined) {
+    chrome.tabs.sendMessage(indicatorTab, { type: 'indicator_show' }).catch(() => {});
   }
   // Trivial tools excluded from the chat_tool_notice indicator.
   const excludedFromNotice =
@@ -879,15 +964,15 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   let ok = true;
   inFlightCount++;
   try {
-    const result = await dispatchTool(tool, params);
+    const result = await dispatchTool(tool, params, tabId);
     return result;
   } catch (e) {
     ok = false;
     throw e;
   } finally {
     inFlightCount--;
-    if (broadcastsIndicator && targetTabId !== undefined) {
-      chrome.tabs.sendMessage(targetTabId, { type: 'indicator_hide' }).catch(() => {});
+    if (broadcastsIndicator && indicatorTab !== undefined) {
+      chrome.tabs.sendMessage(indicatorTab, { type: 'indicator_hide' }).catch(() => {});
     }
     // Best-effort chat_tool_notice: if exactly one chat turn is active, notify its port.
     if (!excludedFromNotice && turnToPort.size === 1) {
@@ -905,7 +990,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
 // Dispatch runs through `runDispatch`, which validates params against the contract
 // before invoking the handler — so the schema is load-bearing, not just docs.
 // biome-ignore lint/suspicious/noExplicitAny: handlers receive contract-validated params
-const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>> = {
+const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | Promise<unknown>> = {
   ping: () => ({ ok: true, version: VERSION }),
   capabilities: () => buildCapabilities(VERSION),
   set_bridge_port: (params: { port: number }) => {
@@ -933,10 +1018,10 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
     chrome.runtime.reload();
     return { reloading: true };
   },
-  debug_exec: () => {
+  debug_exec: (_params: unknown, tabId?: number) => {
     // Diagnostic: test if __xcshReadAx is available via the debugger path.
-    const tabId = requireTab();
-    return evalInPage(tabId, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
+    const t = requireTab(tabId);
+    return evalInPage(t, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
   },
   navigate,
   login,
@@ -978,7 +1063,9 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   detach,
   set_explain_mode: setExplainMode,
   annotate,
-  get_page_context: () => buildPageContext(),
+  // Chat-flow parity (~810): no controlled tab → buildPageContext returns null
+  // (panel shows inactive) rather than throwing. Pass the raw param through.
+  get_page_context: (_params: unknown, tabId?: number) => buildPageContext(tabId),
 };
 
 // Fail fast (at SW load) if the dispatch map and the published contract diverge —
@@ -990,11 +1077,11 @@ for (const name of toolNames()) {
   if (!(name in TOOL_HANDLERS)) throw new Error(`tool "${name}" is described but has no handler`);
 }
 
-function dispatchTool(tool: string, params: unknown): Promise<unknown> {
-  return runDispatch(tool, params, TOOL_HANDLERS);
+function dispatchTool(tool: string, params: unknown, tabId?: number): Promise<unknown> {
+  return runDispatch(tool, params, TOOL_HANDLERS, tabId);
 }
 
-async function navigate(params: { url: string }): Promise<{ tabId: number }> {
+async function navigate(params: { url: string }, boundTabId?: number): Promise<{ tabId: number }> {
   const url = params?.url;
   if (typeof url !== 'string' || !isScopedUrl(url)) {
     throw new Error(`navigate: url not in scoped console domains: ${url}`);
@@ -1019,23 +1106,21 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     throw new Error(`navigate: url blocked by managed policy: ${url}`);
   }
 
-  // REUSE one console tab — do NOT close/recreate. Repeatedly creating fresh
-  // tabs churns the OIDC session (causing "Invalid CSRF token") and forces a
-  // new chrome.debugger attach (the "started debugging" infobar) each time.
-  // Since reads go through CDP (not a content script), a stable single tab is
-  // both correct and far gentler on the auth flow.
+  // REUSE this worker's OWN bound tab — do NOT close/recreate, and never adopt
+  // another console tab (that would let a worker drive a tab it isn't bound to).
+  // Repeatedly creating fresh tabs also churns the OIDC session (causing "Invalid
+  // CSRF token") and forces a new chrome.debugger attach each time. A new tab is
+  // created ONLY when the bound tab is gone. Falls back to the global targetTabId
+  // solely for legacy callers (login's initial navigate) that pass no bound tab.
+  const reuseCandidate = boundTabId ?? targetTabId;
   let reuseId: number | undefined;
-  if (targetTabId !== undefined) {
+  if (reuseCandidate !== undefined) {
     try {
-      const t = await chrome.tabs.get(targetTabId);
+      const t = await chrome.tabs.get(reuseCandidate);
       if (t.id !== undefined) reuseId = t.id;
     } catch {
-      /* prior tab was closed */
+      /* the worker's bound tab was closed — a fresh tab is created below */
     }
-  }
-  if (reuseId === undefined) {
-    const existing = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
-    if (existing.length > 0 && existing[0].id !== undefined) reuseId = existing[0].id;
   }
 
   let tabId: number;
@@ -1095,7 +1180,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials && !loginInProgress) {
-      await login(lastLoginCredentials);
+      await login(lastLoginCredentials, tabId);
       await neutralizeBeforeunload(tabId);
       try {
         await ensureDebuggerAttached(tabId);
@@ -1181,11 +1266,14 @@ async function waitForSettle(tabId: number, timeoutMs = 15_000): Promise<void> {
  * Credentials are used in-memory only (passed per call from xcsh); they are
  * never persisted by the extension.
  */
-async function login(params: {
-  email: string;
-  password: string;
-  consoleUrl: string;
-}): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
+async function login(
+  params: {
+    email: string;
+    password: string;
+    consoleUrl: string;
+  },
+  boundTabId?: number,
+): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   const { email, password, consoleUrl } = params ?? ({} as any);
   if (!email || !password || !consoleUrl) {
@@ -1217,7 +1305,7 @@ async function login(params: {
   loginInProgress = true;
   let tabId: number;
   try {
-    ({ tabId } = await navigate({ url: consoleUrl }));
+    ({ tabId } = await navigate({ url: consoleUrl }, boundTabId));
   } finally {
     loginInProgress = false;
   }
@@ -1388,11 +1476,11 @@ function waitForNavigation(tabId: number): Promise<void> {
   });
 }
 
-function requireTab(): number {
-  if (targetTabId === undefined) {
+function requireTab(tabId?: number): number {
+  if (tabId === undefined) {
     throw new Error('no target tab — call navigate first');
   }
-  return targetTabId;
+  return tabId;
 }
 
 /**
@@ -1602,8 +1690,7 @@ async function neutralizeBeforeunload(tabId: number): Promise<void> {
 }
 
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
-async function readAxFromTab(): Promise<AxNode> {
-  const tabId = requireTab();
+async function readAxFromTab(tabId: number): Promise<AxNode> {
   // chrome.scripting.executeScript HANGS on the heavy XC SPA (confirmed: 30s+
   // timeout while chrome.debugger Runtime.evaluate returns in 13ms on the same
   // page). Route ALL page reads through the debugger instead.
@@ -1640,15 +1727,20 @@ async function readAxFromTab(): Promise<AxNode> {
   throw new Error('read_ax: __xcshReadAx not available via debugger (page may still be loading)');
 }
 
-async function readAx(): Promise<unknown> {
-  return readAxFromTab();
+async function readAx(_params: unknown, _tabId?: number): Promise<unknown> {
+  const tabId = requireTab(_tabId);
+  return readAxFromTab(tabId);
 }
 
-async function waitFor(params: {
-  selector: string;
-  context?: string;
-  timeoutMs?: number;
-}): Promise<{ found: true; ref: string }> {
+async function waitFor(
+  params: {
+    selector: string;
+    context?: string;
+    timeoutMs?: number;
+  },
+  _tabId?: number,
+): Promise<{ found: true; ref: string }> {
+  const tabId = requireTab(_tabId);
   // TODO: context scoping — `context` is ignored in Phase 1; a plain matchNode
   // suffices. Phase 2 adds scoped resolution via findSectionContainer.
   const selector = params?.selector;
@@ -1656,7 +1748,7 @@ async function waitFor(params: {
   const loc = parseLocator(selector);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const tree = await readAxFromTab();
+    const tree = await readAxFromTab(tabId);
     try {
       const node = matchNode(tree, loc);
       return { found: true, ref: node.ref as string };
@@ -1667,15 +1759,18 @@ async function waitFor(params: {
   throw new Error(`wait_for "${selector}" timed out after ${timeoutMs}ms`);
 }
 
-async function assertText(params: {
-  selector: string;
-  expected: string;
-  context?: string;
-}): Promise<{ asserted: true; text: string }> {
+async function assertText(
+  params: {
+    selector: string;
+    expected: string;
+    context?: string;
+  },
+  _tabId?: number,
+): Promise<{ asserted: true; text: string }> {
+  const tabId = requireTab(_tabId);
   // TODO: context scoping — `context` is ignored in Phase 1.
-  const tabId = requireTab();
   const { selector, expected } = params;
-  const tree = await readAxFromTab();
+  const tree = await readAxFromTab(tabId);
   const node = matchNode(tree, parseLocator(selector));
   // The matched AX node's accessible name often already contains the text;
   // fall back to the element's innerText (content script) for a full check.
@@ -1692,10 +1787,13 @@ async function assertText(params: {
   return { asserted: true, text: text.slice(0, 200) };
 }
 
-async function queryDom(params: {
-  selector: string;
-}): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
-  const tabId = requireTab();
+async function queryDom(
+  params: {
+    selector: string;
+  },
+  _tabId?: number,
+): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
+  const tabId = requireTab(_tabId);
   await ensureDebuggerAttached(tabId);
   try {
     const doc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: 0 })) as {
@@ -1734,11 +1832,15 @@ async function queryDom(params: {
   }
 }
 
-async function find(params: {
-  selector: string;
-}): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
+async function find(
+  params: {
+    selector: string;
+  },
+  _tabId?: number,
+): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
+  const tabId = requireTab(_tabId);
   const { selector } = params;
-  const tree = await readAxFromTab();
+  const tree = await readAxFromTab(tabId);
   const nodes = matchNodes(tree, parseLocator(selector));
   return {
     refs: nodes.slice(0, 20).map((n) => ({
@@ -1828,10 +1930,9 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
 }
 
 /** Build the page-context snapshot for the active console tab. */
-async function buildPageContext(): Promise<unknown> {
-  const tabId = targetTabId;
+async function buildPageContext(tabId: number | undefined): Promise<unknown> {
   if (tabId === undefined) return null; // no controlled console tab — panel shows inactive
-  await enableNetworkObserver();
+  await enableNetworkObserver(tabId);
   let url = '';
   let title = '';
   try {
@@ -1843,7 +1944,7 @@ async function buildPageContext(): Promise<unknown> {
   }
   let ax: AxLike | null = null;
   try {
-    ax = (await readAxFromTab()) as unknown as AxLike;
+    ax = (await readAxFromTab(tabId)) as unknown as AxLike;
   } catch {
     /* page still loading */
   }
@@ -1856,16 +1957,18 @@ async function buildPageContext(): Promise<unknown> {
  * by explain mode, because a chat-initiated highlight is an explicit, user-facing
  * request. The fast-automation `annotate` tool keeps its "off by default" gate.
  */
-async function chatAnnotate(spec: {
-  kind?: string;
-  ref?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}): Promise<void> {
-  if (targetTabId === undefined) return;
-  const tabId = targetTabId;
+async function chatAnnotate(
+  spec: {
+    kind?: string;
+    ref?: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  },
+  tabId: number | undefined,
+): Promise<void> {
+  if (tabId === undefined) return;
   const kind = spec.kind ?? 'highlight';
   if (kind === 'highlight') {
     let rect: { x: number; y: number; w: number; h: number } | undefined;
@@ -1889,18 +1992,21 @@ async function chatAnnotate(spec: {
  * an explicit rect or a `ref` we resolve to its border box here (the same ref the
  * agent uses to click); `fingerprint` takes a point.
  */
-async function annotate(params: {
-  kind?: string;
-  ref?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}): Promise<unknown> {
+async function annotate(
+  params: {
+    kind?: string;
+    ref?: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  },
+  _tabId?: number,
+): Promise<unknown> {
+  const tabId = requireTab(_tabId);
   const kind = params?.kind;
   if (!kind) throw new Error('annotate: kind is required');
   if (!explainMode) return { skipped: true, reason: 'explain mode off' };
-  const tabId = requireTab();
 
   if (kind === 'highlight') {
     let rect: { x: number; y: number; w: number; h: number } | undefined;
@@ -1957,8 +2063,8 @@ async function resolveRectByRef(
   }
 }
 
-async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
-  const tabId = requireTab();
+async function click(params: { ref: string }, _tabId?: number): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab(_tabId);
   const ref = params?.ref;
   if (!ref) throw new Error('click: ref is required');
   // Resolve the ref → live element handle, then click via the deterministic
@@ -1977,11 +2083,14 @@ async function click(params: { ref: string }): Promise<{ clicked: string; x: num
  * role selectors, or a portal-option finder. We hold the element handle and click
  * via the layout-engine + hit-test path. `wait_ms` polls for the element to appear
  * (CDK portals render async). Never silently mis-clicks: occlusion fails loudly. */
-async function clickElement(params: {
-  js: string;
-  wait_ms?: number;
-}): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
-  const tabId = requireTab();
+async function clickElement(
+  params: {
+    js: string;
+    wait_ms?: number;
+  },
+  _tabId?: number,
+): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
+  const tabId = requireTab(_tabId);
   const js = params?.js;
   if (typeof js !== 'string' || js.length === 0) throw new Error('click_element: js is required');
   const waitMs = Math.min(Number(params?.wait_ms ?? 0), 20_000);
@@ -2000,8 +2109,11 @@ async function clickElement(params: {
 /** Trusted click at explicit viewport coordinates. Lets callers act on elements
  * located via `javascript_tool` (getBoundingClientRect) WITHOUT a `read_ax` ref
  * — essential on heavy pages (e.g. the create form) where read_ax cannot run. */
-async function clickXy(params: { x: number; y: number }): Promise<{ clicked: string; x: number; y: number }> {
-  const tabId = requireTab();
+async function clickXy(
+  params: { x: number; y: number },
+  _tabId?: number,
+): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab(_tabId);
   const x = Number(params?.x);
   const y = Number(params?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('click_xy: numeric x and y are required');
@@ -2013,8 +2125,8 @@ async function clickXy(params: { x: number; y: number }): Promise<{ clicked: str
  * `.value`, this fires genuine trusted `input` events, so Angular's
  * ControlValueAccessor commits the value to the reactive form model — the
  * authentic "human typing" path, robust to vsui value-descriptor patching. */
-async function typeText(params: { text: string }): Promise<{ typed: string }> {
-  const tabId = requireTab();
+async function typeText(params: { text: string }, _tabId?: number): Promise<{ typed: string }> {
+  const tabId = requireTab(_tabId);
   const text = params?.text;
   if (typeof text !== 'string') throw new Error('type_text: text is required');
   await ensureDebuggerAttached(tabId);
@@ -2028,13 +2140,16 @@ async function typeText(params: { text: string }): Promise<{ typed: string }> {
  * through `evaluateWithRecovery`, which detaches/reattaches the debugger and kills
  * input focus, closing the CDK portal. Here we ONLY use plain `evalInPage`
  * (Runtime.evaluate, no detach) and trusted `Input.*` CDP commands. */
-async function labelSelect(params: {
-  selector: string;
-  value: string;
-  label_value?: string;
-  wait_ms?: number;
-}): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
-  const tabId = requireTab();
+async function labelSelect(
+  params: {
+    selector: string;
+    value: string;
+    label_value?: string;
+    wait_ms?: number;
+  },
+  _tabId?: number,
+): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
+  const tabId = requireTab(_tabId);
   const selector = params?.selector;
   const value = params?.value ?? '';
   const labelValue = params?.label_value ?? '';
@@ -2211,12 +2326,12 @@ async function labelSelect(params: {
   };
 }
 
-async function screenshot(): Promise<{ data: string; format: string }> {
+async function screenshot(_params: unknown, _tabId?: number): Promise<{ data: string; format: string }> {
+  const tabId = requireTab(_tabId);
   // captureVisibleTab freezes the MV3 service worker's event loop on this
   // 3024x1964 retina Mac (even q5), blocking ALL subsequent bridge requests.
   // Use the debugger's Runtime.evaluate to capture a downscaled canvas screenshot
   // instead — this runs in the page (no SW freeze) and produces a small JPEG.
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   const data = await evalInPage<string>(
     tabId,
@@ -2245,8 +2360,11 @@ async function screenshot(): Promise<{ data: string; format: string }> {
   return { data, format: 'jpeg' };
 }
 
-async function formInput(params: { ref: string; value: string }): Promise<{ filled: string; value: string }> {
-  const tabId = requireTab();
+async function formInput(
+  params: { ref: string; value: string },
+  _tabId?: number,
+): Promise<{ filled: string; value: string }> {
+  const tabId = requireTab(_tabId);
   const ref = params?.ref;
   const value = params?.value;
   if (!ref) throw new Error('form_input: ref is required');
@@ -2267,8 +2385,8 @@ const SPECIAL_KEYS: Record<string, { key: string; code: string; keyCode: number 
   Space: { key: ' ', code: 'Space', keyCode: 32 },
 };
 
-async function keyPress(params: { key: string }): Promise<{ pressed: string }> {
-  const tabId = requireTab();
+async function keyPress(params: { key: string }, _tabId?: number): Promise<{ pressed: string }> {
+  const tabId = requireTab(_tabId);
   const key = params?.key;
   if (typeof key !== 'string' || key.length === 0) {
     throw new Error('key_press: key is required');
@@ -2304,8 +2422,8 @@ async function keyPress(params: { key: string }): Promise<{ pressed: string }> {
   return { pressed: key };
 }
 
-async function detach(): Promise<{ detached: true }> {
-  const tabId = requireTab();
+async function detach(_params: unknown, _tabId?: number): Promise<{ detached: true }> {
+  const tabId = requireTab(_tabId);
   await chrome.debugger.detach({ tabId }).catch(() => {});
   attachedTabs.delete(tabId);
   return { detached: true };
@@ -2313,8 +2431,11 @@ async function detach(): Promise<{ detached: true }> {
 
 // --- Content-script-backed tools -------------------------------------------
 
-async function selectOption(params: { ref: string; value: string }): Promise<{ selected: string; ref: string }> {
-  const tabId = requireTab();
+async function selectOption(
+  params: { ref: string; value: string },
+  _tabId?: number,
+): Promise<{ selected: string; ref: string }> {
+  const tabId = requireTab(_tabId);
   const { ref, value } = params;
   if (!ref) throw new Error('select_option: ref is required');
   const ok = await evalInPage<boolean>(
@@ -2325,16 +2446,16 @@ async function selectOption(params: { ref: string; value: string }): Promise<{ s
   return { selected: value, ref };
 }
 
-async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> {
-  const tabId = requireTab();
+async function scrollTo(params: { ref: string }, _tabId?: number): Promise<{ scrolled: string }> {
+  const tabId = requireTab(_tabId);
   const { ref } = params;
   if (!ref) throw new Error('scroll_to: ref is required');
   await evalInPage<void>(tabId, `typeof __xcshScrollTo==='function'&&__xcshScrollTo(${JSON.stringify(ref)})`);
   return { scrolled: ref };
 }
 
-async function getPageText(): Promise<{ text: string }> {
-  const tabId = requireTab();
+async function getPageText(_params: unknown, _tabId?: number): Promise<{ text: string }> {
+  const tabId = requireTab(_tabId);
   // Use Runtime.evaluate via the debugger (MAIN world) — the content-script
   // ISOLATED-world read returned empty on the XC SPA, but the MAIN-world
   // document.body.innerText has the rendered text.
@@ -2348,8 +2469,8 @@ async function getPageText(): Promise<{ text: string }> {
 
 // --- JavaScript evaluation (domain-scoped) ---------------------------------
 
-async function javascriptTool(params: { code: string }): Promise<{ result: unknown }> {
-  const tabId = requireTab();
+async function javascriptTool(params: { code: string }, _tabId?: number): Promise<{ result: unknown }> {
+  const tabId = requireTab(_tabId);
   // Defense-in-depth (Phase 1 finding): cap evaluated code size.
   const code = params?.code;
   if (typeof code !== 'string') {
@@ -2446,11 +2567,14 @@ async function tabsClose(params: { tabId: number }): Promise<{ closed: number }>
   return { closed: tabId };
 }
 
-async function resizeWindow(params: {
-  width: number;
-  height: number;
-}): Promise<{ resized: { width: number; height: number } }> {
-  const tabId = requireTab();
+async function resizeWindow(
+  params: {
+    width: number;
+    height: number;
+  },
+  _tabId?: number,
+): Promise<{ resized: { width: number; height: number } }> {
+  const tabId = requireTab(_tabId);
   const { width, height } = params;
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) {
@@ -2461,8 +2585,12 @@ async function resizeWindow(params: {
 
 // --- Diagnostic reads (console / network) ----------------------------------
 
-async function readConsole(params: { pattern?: string }): Promise<{ messages: Array<{ type: string; text: string }> }> {
-  await enableConsoleObserver();
+async function readConsole(
+  params: { pattern?: string },
+  _tabId?: number,
+): Promise<{ messages: Array<{ type: string; text: string }> }> {
+  const tabId = requireTab(_tabId);
+  await enableConsoleObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   let entries = consoleBuffer.map((e: any) => ({
@@ -2481,11 +2609,15 @@ async function readConsole(params: { pattern?: string }): Promise<{ messages: Ar
  * `/api/config/namespaces/.../` on save — this watches for that response
  * and returns immediately with the status code + any error body.
  */
-async function waitForApiResponse(params: {
-  pattern?: string;
-  timeout_ms?: number;
-}): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
-  await enableNetworkObserver();
+async function waitForApiResponse(
+  params: {
+    pattern?: string;
+    timeout_ms?: number;
+  },
+  _tabId?: number,
+): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
+  const tabId = requireTab(_tabId);
+  await enableNetworkObserver(tabId);
   const pattern = params?.pattern ?? '/api/config/';
   const deadline = Date.now() + (params?.timeout_ms ?? 15000);
   const startIdx = networkBuffer.length; // only check NEW entries
@@ -2506,7 +2638,6 @@ async function waitForApiResponse(params: {
       if (status >= 400) {
         let error = `HTTP ${status}`;
         try {
-          const tabId = requireTab();
           const body = (await chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', {
             requestId: e.requestId,
           })) as { body?: string };
@@ -2525,14 +2656,18 @@ async function waitForApiResponse(params: {
   return { found: false, error: 'no matching API response within timeout' };
 }
 
-async function readNetwork(params: { pattern?: string }): Promise<{
+async function readNetwork(
+  params: { pattern?: string },
+  _tabId?: number,
+): Promise<{
   requests: Array<{
     method: string;
     url: string | undefined;
     status: number | undefined;
   }>;
 }> {
-  await enableNetworkObserver();
+  const tabId = requireTab(_tabId);
+  await enableNetworkObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   let entries = networkBuffer.map((e: any) => ({
@@ -2554,8 +2689,9 @@ async function diagSuspension(): Promise<{ summary: unknown; events: DiagEvent[]
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,
  * annotated with the tenant/env each hop resolves to (Phase 0b login-topology). */
-async function captureLoginFlow(): Promise<{ hops: unknown[] }> {
-  await enableNetworkObserver();
+async function captureLoginFlow(_params: unknown, _tabId?: number): Promise<{ hops: unknown[] }> {
+  const tabId = requireTab(_tabId);
+  await enableNetworkObserver(tabId);
   return { hops: extractRedirects(networkBuffer, sessionKeyFromUrl) };
 }
 
@@ -2578,15 +2714,19 @@ async function fileUpload(params: {
 
 // --- Batch ------------------------------------------------------------------
 
-// biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function browserBatch(params: { actions: Array<{ tool: string; params: any }> }): Promise<{
+async function browserBatch(
+  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+  params: { actions: Array<{ tool: string; params: any }> },
+  _tabId?: number,
+): Promise<{
   results: Array<{ tool: string; content: unknown; is_error: boolean }>;
 }> {
+  const tabId = requireTab(_tabId);
   const actions = params?.actions ?? [];
   const results: Array<{ tool: string; content: unknown; is_error: boolean }> = [];
   for (const action of actions) {
     try {
-      const content = await runTool(action.tool, action.params);
+      const content = await runTool(action.tool, action.params, tabId);
       results.push({ tool: action.tool, content, is_error: false });
     } catch (e) {
       results.push({ tool: action.tool, content: String(e), is_error: true });
@@ -2653,7 +2793,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const key = sessionKeyFromUrl(tab?.url);
   const activeKey = key ? sessionKeyStr(key) : null;
   trackTabSessionKey(tabId, activeKey);
-  setActiveTenant(activeKey);
+  setActiveTenant(activeKey, tabId);
   // Hide/show the panel per-tab: only F5 XC tenant tabs get it.
   void applySidePanelGate(tabId, tab?.url);
   // Phase 0a: record activations that WOULD bind a console tab, with the WS
@@ -2691,31 +2831,40 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   void applySidePanelGate(tabId, changeInfo.url);
   const key2 = sessionKeyFromUrl(changeInfo.url);
   const activeKey2 = key2 ? sessionKeyStr(key2) : null;
+  // A tab that already has a worker just changed tenant key (e.g. navigated from
+  // tenant A's console to tenant B's, or away to a non-console URL): release the
+  // stale worker (its context is the old tenant) and, for a new tenant, spawn a
+  // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
+  const prevKey = tabSessionKeys.get(tabId);
+  if (
+    !manualPortPinned &&
+    prevKey !== undefined &&
+    prevKey !== activeKey2 &&
+    portForTab(registry, sidForTab(tabId)) !== undefined
+  ) {
+    nmSend({ type: 'release', sessionId: sidForTab(tabId) });
+    clearPortForTab(tabId);
+    if (activeKey2 !== null && activeKey2 !== '') {
+      nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: activeKey2 });
+    }
+  }
   trackTabSessionKey(tabId, activeKey2);
-  setActiveTenant(activeKey2);
+  setActiveTenant(activeKey2, tabId);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
-  // Capture the closed tab's tenant key BEFORE pruning — onRemoved has no URL.
-  const closedKey = tabSessionKeys.get(tabId);
   tabSessionKeys.delete(tabId);
+  clearPortForTab(tabId); // drop this tab's socket→tab binding
   const a = decideBinding(bindingState(), { kind: 'removed', tabId });
   if (a.action === 'unbind') await setControlledTab(undefined);
   broadcastToChatPanels({ type: 'tab_closed', tabId }); // panel prunes that tab's session
-  // Last tab for this tenant just closed → ask the manager to reap its worker.
-  if (closedKey && !manualPortPinned) {
-    const tabs = await chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]);
-    const remainingKeys = tabs
-      .map((t) => {
-        const k = sessionKeyFromUrl(t.url);
-        return k ? sessionKeyStr(k) : null;
-      })
-      .filter((k): k is string => k !== null);
-    if (hasNoRemainingTenantTab(remainingKeys, closedKey)) {
-      nmSend({ type: 'release', tenantKey: closedKey });
-    }
+  // Per-tab: the closed tab IS the session, so reap its worker directly by sid —
+  // no tenant/last-tab bookkeeping (a sibling tab of the same tenant keeps its
+  // own separate worker). Idempotent: the manager ignores an unknown sid.
+  if (!manualPortPinned) {
+    nmSend({ type: 'release', sessionId: sidForTab(tabId) });
   }
 });
