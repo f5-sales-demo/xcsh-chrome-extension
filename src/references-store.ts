@@ -216,13 +216,20 @@ export function tabSessionKey(index: SessionIndex, tabId: number): string | unde
   return index.byTab[String(tabId)];
 }
 
-/** Forget a tab (on close) WITHOUT deleting the tenant's conversation. */
+/** Forget a tab (on close): drop its `byTab` reverse mapping AND its per-tab
+ * `byTenant` entry (keyed "tenant|env#tabId" → convId) so no orphan index entry
+ * lingers unreachable and unpruned. The persisted Conversation object itself is
+ * left intact (transcripts survive a close). A `byTenant` entry still shared by
+ * another live tab (legacy migrated bare-session-key entries) is kept. */
 export function removeTabSession(index: SessionIndex, tabId: number): SessionIndex {
   const key = String(tabId);
-  if (!(key in index.byTab)) return index;
+  const convKey = index.byTab[key];
+  if (convKey === undefined) return index;
   const byTab = { ...index.byTab };
   delete byTab[key];
-  return { byTenant: index.byTenant, byTab };
+  const byTenant = { ...index.byTenant };
+  if (!Object.values(byTab).includes(convKey)) delete byTenant[convKey];
+  return { byTenant, byTab };
 }
 
 /** Build a SessionIndex from an old TabIndex, given each tab's resolved session
