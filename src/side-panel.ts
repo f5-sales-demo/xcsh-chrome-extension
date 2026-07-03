@@ -297,44 +297,57 @@ function updateAssistantBody(msgId: string, text: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Per-tenant session helpers
+// Per-(tenant, tab) session helpers
 // ---------------------------------------------------------------------------
 
-/** Show the conversation for a tenant session ("tenant|env"), or a blank
- * inactive conversation when `sessionKey` is null (non-tenant tab). Many tabs of
- * the same tenant resolve to the SAME conversation. */
-async function switchToTenantSession(sessionKey: string | null): Promise<void> {
+/** The conversation-index key for a tab's transcript: composed from BOTH the
+ * tenant session key ("tenant|env") AND the tab id. This is what makes two tabs
+ * of the SAME tenant keep DISTINCT transcripts (per-tab workers), while a tab
+ * that re-logs into a different tenant starts fresh — the tenant is part of the
+ * key, so the prior tenant's conversation is never carried. */
+function tabConvKey(sessionKey: string, tabId: number): string {
+  return `${sessionKey}#${tabId}`;
+}
+
+/** Show the conversation for the active tab, keyed by (tenant, tab) so two tabs
+ * of one tenant never share a transcript. Shows a blank inactive conversation
+ * when `sessionKey`/`tabId` is absent (non-tenant tab). Routing is per active
+ * tab: the SW forwards chat to that tab's own worker (`activePort`). */
+async function switchToTenantSession(sessionKey: string | null, tabId?: number): Promise<void> {
   boundSessionKey = sessionKey;
-  if (!sessionKey) {
+  if (!sessionKey || tabId === undefined) {
     conv = newConversation(`conv-${crypto.randomUUID()}`, Date.now());
     renderAll();
     return;
   }
   const idx = await loadSessionIndex();
-  const convId = tenantConv(idx, sessionKey);
+  const convKey = tabConvKey(sessionKey, tabId);
+  const convId = tenantConv(idx, convKey);
   const existing = convId ? await loadConversation(convId) : null;
   conv = existing ?? newConversation(`conv-${crypto.randomUUID()}`, Date.now());
-  if (!existing && boundTabId !== undefined) {
-    await saveSessionIndex(setTenantConv(idx, sessionKey, boundTabId, conv.id));
+  if (!existing) {
+    await saveSessionIndex(setTenantConv(idx, convKey, tabId, conv.id));
     await saveConversation(conv);
   }
   renderAll();
 }
 
-/** Forget a closed tab WITHOUT deleting the tenant's conversation (it persists
- * for that tenant's other/future tabs — many-tabs -> one-session). */
+/** Forget a closed tab WITHOUT deleting its conversation (persisted transcripts
+ * survive a close; `removeTabSession` only drops the tab→key reverse mapping). */
 async function pruneTabSession(tabId: number): Promise<void> {
   const idx = await loadSessionIndex();
   await saveSessionIndex(removeTabSession(idx, tabId));
 }
 
-/** Associate the CURRENT (in-flight) conversation with a tenant the first time we
- * learn it mid-turn, without swapping — so the flagship first run's chat belongs
- * to the tenant it drove. No-op if the tenant already has a session. */
+/** Associate the CURRENT (in-flight) conversation with the (tenant, tab) the
+ * first time we learn it mid-turn, without swapping — so the flagship first
+ * run's chat belongs to the tab it drove. No-op if that tab already has a
+ * session. */
 async function adoptCurrentConvForTenant(sessionKey: string, tabId: number): Promise<void> {
   const idx = await loadSessionIndex();
-  if (tenantConv(idx, sessionKey)) return;
-  await saveSessionIndex(setTenantConv(idx, sessionKey, tabId, conv.id));
+  const convKey = tabConvKey(sessionKey, tabId);
+  if (tenantConv(idx, convKey)) return;
+  await saveSessionIndex(setTenantConv(idx, convKey, tabId, conv.id));
   await saveConversation(conv);
 }
 
@@ -381,13 +394,19 @@ async function gateToActiveTab(tabId?: number): Promise<void> {
     }
     panelInactive = false;
     setInputEnabled(true);
+    const prevTabId = boundTabId;
     boundTabId = tab?.id;
     ctxChipEl.textContent = tab?.title || tab?.url || 'console tab';
     if (sessEl) sessEl.textContent = `${key.tenant}·${key.env}`;
     // Contextless MOTD hint keyed off the FOCUSED tab's tenant (not the SW's global
     // single-session mirror): show it iff THIS tenant's live worker is contextless.
     setContextHint(contextHintTenant(keyStr, liveTenants) ? `${key.tenant}·${key.env}` : null);
-    if (keyStr !== boundSessionKey) await switchToTenantSession(keyStr);
+    // Swap the transcript when the tenant OR the tab changed. Two tabs of the SAME
+    // tenant keep DISTINCT conversations (keyed by (tenant, tab)), so focusing tab B
+    // shows tab B's chat — never tab A's — and chat routes to tab B's own worker.
+    if (keyStr !== boundSessionKey || tab?.id !== prevTabId) {
+      await switchToTenantSession(keyStr, tab?.id);
+    }
   } else {
     // Active tab is NOT a tenant — ENFORCE inactive every time (never skip): the
     // SW's page_context/tab_bound for the still-controlled tab must not win.
@@ -505,7 +524,13 @@ port.onMessage.addListener((m: unknown) => {
   }
 
   if (msg.type === 'tab_closed') {
-    abortActiveTurn('Tab changed — chat ended. Resend to continue.');
+    // One panel per window serves many tabs — only abort the in-flight turn when
+    // the CLOSED tab is the one this panel is driving. Closing an unrelated
+    // console tab must not blank a turn shown for a different (bound) tab.
+    // Transcript cleanup stays UNCONDITIONAL: prune the closed tab's session either way.
+    if ((msg.tabId as number) === boundTabId) {
+      abortActiveTurn('Tab changed — chat ended. Resend to continue.');
+    }
     pruneTabSession(msg.tabId as number).catch(() => {});
     return;
   }
