@@ -27,10 +27,11 @@ await Bun.build({
 });
 
 await Bun.build({
-  entrypoints: ['src/options.ts'],
+  entrypoints: ['src/options.tsx'],
   outdir: 'dist',
   target: 'browser',
   minify: false,
+  format: 'esm',
 });
 
 await Bun.build({
