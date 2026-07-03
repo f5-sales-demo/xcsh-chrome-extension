@@ -41,13 +41,23 @@ export function cssVars(): string {
 
 const STYLE_ID = 'xcsh-tokens';
 
-/** Insert the token stylesheet once into a Document or ShadowRoot. */
+/** Insert the token stylesheet once into a Document or ShadowRoot.
+ * A Document cannot accept element children directly (that throws
+ * HierarchyRequestError), so we mount into `<head>` (falling back to
+ * `<html>`); a ShadowRoot is itself a valid mount point. `nodeType === 9`
+ * (DOCUMENT_NODE) is used to discriminate because `instanceof Document`
+ * is unreliable across realms/test DOMs. */
 export function injectTokens(root: Document | ShadowRoot): void {
-  const doc = root instanceof Document ? root : root.ownerDocument;
+  const isDocument = root.nodeType === 9;
+  const mount: ParentNode | null = isDocument
+    ? ((root as Document).head ?? (root as Document).documentElement)
+    : (root as ShadowRoot);
+  if (!mount) return;
+  if (mount.querySelector(`#${STYLE_ID}`)) return;
+  const doc = isDocument ? (root as Document) : (root as ShadowRoot).ownerDocument;
   if (!doc) return;
-  if ((root as ParentNode).querySelector?.(`#${STYLE_ID}`)) return;
   const style = doc.createElement('style');
   style.id = STYLE_ID;
   style.textContent = cssVars();
-  (root as ParentNode).append(style);
+  mount.append(style);
 }
