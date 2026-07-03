@@ -641,9 +641,11 @@ function onMessage(msg: any, sourcePort: number): void {
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
     // TEMPORARY (Task 6 replaces the source): dispatch still carries the single
-    // global targetTabId, wrapped in requireTab so an unset tab errors as before.
+    // global targetTabId, passed RAW (may be undefined). Tab-independent tools
+    // (navigate, ping, tabs_*, …) run regardless; tab-using handlers validate the
+    // param themselves via requireTab — so `navigate` still works cold-start.
     Promise.resolve()
-      .then(() => runTool(tool, params, requireTab(targetTabId)))
+      .then(() => runTool(tool, params, targetTabId))
       .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
       .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
@@ -867,7 +869,7 @@ function stopAgent(): void {
 // --- Tool implementations --------------------------------------------------
 
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function runTool(tool: string, params: any, tabId: number): Promise<unknown> {
+async function runTool(tool: string, params: any, tabId?: number): Promise<unknown> {
   // Pulse the on-page indicator while any non-trivial tool runs. `ping`,
   // `capabilities`, and `set_explain_mode` take no page action, so they stay silent.
   const broadcastsIndicator = tool !== 'ping' && tool !== 'capabilities' && tool !== 'set_explain_mode';
@@ -906,7 +908,7 @@ async function runTool(tool: string, params: any, tabId: number): Promise<unknow
 // Dispatch runs through `runDispatch`, which validates params against the contract
 // before invoking the handler — so the schema is load-bearing, not just docs.
 // biome-ignore lint/suspicious/noExplicitAny: handlers receive contract-validated params
-const TOOL_HANDLERS: Record<string, (params: any, tabId: number) => unknown | Promise<unknown>> = {
+const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | Promise<unknown>> = {
   ping: () => ({ ok: true, version: VERSION }),
   capabilities: () => buildCapabilities(VERSION),
   set_bridge_port: (params: { port: number }) => {
@@ -934,9 +936,10 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId: number) => unknown | Pr
     chrome.runtime.reload();
     return { reloading: true };
   },
-  debug_exec: (_params: unknown, tabId: number) => {
+  debug_exec: (_params: unknown, tabId?: number) => {
     // Diagnostic: test if __xcshReadAx is available via the debugger path.
-    return evalInPage(tabId, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
+    const t = requireTab(tabId);
+    return evalInPage(t, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
   },
   navigate,
   login,
@@ -978,7 +981,9 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId: number) => unknown | Pr
   detach,
   set_explain_mode: setExplainMode,
   annotate,
-  get_page_context: (_params: unknown, tabId: number) => buildPageContext(tabId),
+  // Chat-flow parity (~810): no controlled tab → buildPageContext returns null
+  // (panel shows inactive) rather than throwing. Pass the raw param through.
+  get_page_context: (_params: unknown, tabId?: number) => buildPageContext(tabId),
 };
 
 // Fail fast (at SW load) if the dispatch map and the published contract diverge —
@@ -990,7 +995,7 @@ for (const name of toolNames()) {
   if (!(name in TOOL_HANDLERS)) throw new Error(`tool "${name}" is described but has no handler`);
 }
 
-function dispatchTool(tool: string, params: unknown, tabId: number): Promise<unknown> {
+function dispatchTool(tool: string, params: unknown, tabId?: number): Promise<unknown> {
   return runDispatch(tool, params, TOOL_HANDLERS, tabId);
 }
 
@@ -1639,7 +1644,8 @@ async function readAxFromTab(tabId: number): Promise<AxNode> {
   throw new Error('read_ax: __xcshReadAx not available via debugger (page may still be loading)');
 }
 
-async function readAx(_params: unknown, tabId: number): Promise<unknown> {
+async function readAx(_params: unknown, _tabId?: number): Promise<unknown> {
+  const tabId = requireTab(_tabId);
   return readAxFromTab(tabId);
 }
 
@@ -1649,8 +1655,9 @@ async function waitFor(
     context?: string;
     timeoutMs?: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ found: true; ref: string }> {
+  const tabId = requireTab(_tabId);
   // TODO: context scoping — `context` is ignored in Phase 1; a plain matchNode
   // suffices. Phase 2 adds scoped resolution via findSectionContainer.
   const selector = params?.selector;
@@ -1675,8 +1682,9 @@ async function assertText(
     expected: string;
     context?: string;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ asserted: true; text: string }> {
+  const tabId = requireTab(_tabId);
   // TODO: context scoping — `context` is ignored in Phase 1.
   const { selector, expected } = params;
   const tree = await readAxFromTab(tabId);
@@ -1700,8 +1708,9 @@ async function queryDom(
   params: {
     selector: string;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
+  const tabId = requireTab(_tabId);
   await ensureDebuggerAttached(tabId);
   try {
     const doc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: 0 })) as {
@@ -1744,8 +1753,9 @@ async function find(
   params: {
     selector: string;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
+  const tabId = requireTab(_tabId);
   const { selector } = params;
   const tree = await readAxFromTab(tabId);
   const nodes = matchNodes(tree, parseLocator(selector));
@@ -1908,8 +1918,9 @@ async function annotate(
     w?: number;
     h?: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<unknown> {
+  const tabId = requireTab(_tabId);
   const kind = params?.kind;
   if (!kind) throw new Error('annotate: kind is required');
   if (!explainMode) return { skipped: true, reason: 'explain mode off' };
@@ -1969,7 +1980,8 @@ async function resolveRectByRef(
   }
 }
 
-async function click(params: { ref: string }, tabId: number): Promise<{ clicked: string; x: number; y: number }> {
+async function click(params: { ref: string }, _tabId?: number): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab(_tabId);
   const ref = params?.ref;
   if (!ref) throw new Error('click: ref is required');
   // Resolve the ref → live element handle, then click via the deterministic
@@ -1993,8 +2005,9 @@ async function clickElement(
     js: string;
     wait_ms?: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
+  const tabId = requireTab(_tabId);
   const js = params?.js;
   if (typeof js !== 'string' || js.length === 0) throw new Error('click_element: js is required');
   const waitMs = Math.min(Number(params?.wait_ms ?? 0), 20_000);
@@ -2015,8 +2028,9 @@ async function clickElement(
  * — essential on heavy pages (e.g. the create form) where read_ax cannot run. */
 async function clickXy(
   params: { x: number; y: number },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ clicked: string; x: number; y: number }> {
+  const tabId = requireTab(_tabId);
   const x = Number(params?.x);
   const y = Number(params?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('click_xy: numeric x and y are required');
@@ -2028,7 +2042,8 @@ async function clickXy(
  * `.value`, this fires genuine trusted `input` events, so Angular's
  * ControlValueAccessor commits the value to the reactive form model — the
  * authentic "human typing" path, robust to vsui value-descriptor patching. */
-async function typeText(params: { text: string }, tabId: number): Promise<{ typed: string }> {
+async function typeText(params: { text: string }, _tabId?: number): Promise<{ typed: string }> {
+  const tabId = requireTab(_tabId);
   const text = params?.text;
   if (typeof text !== 'string') throw new Error('type_text: text is required');
   await ensureDebuggerAttached(tabId);
@@ -2049,8 +2064,9 @@ async function labelSelect(
     label_value?: string;
     wait_ms?: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
+  const tabId = requireTab(_tabId);
   const selector = params?.selector;
   const value = params?.value ?? '';
   const labelValue = params?.label_value ?? '';
@@ -2227,7 +2243,8 @@ async function labelSelect(
   };
 }
 
-async function screenshot(_params: unknown, tabId: number): Promise<{ data: string; format: string }> {
+async function screenshot(_params: unknown, _tabId?: number): Promise<{ data: string; format: string }> {
+  const tabId = requireTab(_tabId);
   // captureVisibleTab freezes the MV3 service worker's event loop on this
   // 3024x1964 retina Mac (even q5), blocking ALL subsequent bridge requests.
   // Use the debugger's Runtime.evaluate to capture a downscaled canvas screenshot
@@ -2262,8 +2279,9 @@ async function screenshot(_params: unknown, tabId: number): Promise<{ data: stri
 
 async function formInput(
   params: { ref: string; value: string },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ filled: string; value: string }> {
+  const tabId = requireTab(_tabId);
   const ref = params?.ref;
   const value = params?.value;
   if (!ref) throw new Error('form_input: ref is required');
@@ -2284,7 +2302,8 @@ const SPECIAL_KEYS: Record<string, { key: string; code: string; keyCode: number 
   Space: { key: ' ', code: 'Space', keyCode: 32 },
 };
 
-async function keyPress(params: { key: string }, tabId: number): Promise<{ pressed: string }> {
+async function keyPress(params: { key: string }, _tabId?: number): Promise<{ pressed: string }> {
+  const tabId = requireTab(_tabId);
   const key = params?.key;
   if (typeof key !== 'string' || key.length === 0) {
     throw new Error('key_press: key is required');
@@ -2320,7 +2339,8 @@ async function keyPress(params: { key: string }, tabId: number): Promise<{ press
   return { pressed: key };
 }
 
-async function detach(_params: unknown, tabId: number): Promise<{ detached: true }> {
+async function detach(_params: unknown, _tabId?: number): Promise<{ detached: true }> {
+  const tabId = requireTab(_tabId);
   await chrome.debugger.detach({ tabId }).catch(() => {});
   attachedTabs.delete(tabId);
   return { detached: true };
@@ -2330,8 +2350,9 @@ async function detach(_params: unknown, tabId: number): Promise<{ detached: true
 
 async function selectOption(
   params: { ref: string; value: string },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ selected: string; ref: string }> {
+  const tabId = requireTab(_tabId);
   const { ref, value } = params;
   if (!ref) throw new Error('select_option: ref is required');
   const ok = await evalInPage<boolean>(
@@ -2342,14 +2363,16 @@ async function selectOption(
   return { selected: value, ref };
 }
 
-async function scrollTo(params: { ref: string }, tabId: number): Promise<{ scrolled: string }> {
+async function scrollTo(params: { ref: string }, _tabId?: number): Promise<{ scrolled: string }> {
+  const tabId = requireTab(_tabId);
   const { ref } = params;
   if (!ref) throw new Error('scroll_to: ref is required');
   await evalInPage<void>(tabId, `typeof __xcshScrollTo==='function'&&__xcshScrollTo(${JSON.stringify(ref)})`);
   return { scrolled: ref };
 }
 
-async function getPageText(_params: unknown, tabId: number): Promise<{ text: string }> {
+async function getPageText(_params: unknown, _tabId?: number): Promise<{ text: string }> {
+  const tabId = requireTab(_tabId);
   // Use Runtime.evaluate via the debugger (MAIN world) — the content-script
   // ISOLATED-world read returned empty on the XC SPA, but the MAIN-world
   // document.body.innerText has the rendered text.
@@ -2363,7 +2386,8 @@ async function getPageText(_params: unknown, tabId: number): Promise<{ text: str
 
 // --- JavaScript evaluation (domain-scoped) ---------------------------------
 
-async function javascriptTool(params: { code: string }, tabId: number): Promise<{ result: unknown }> {
+async function javascriptTool(params: { code: string }, _tabId?: number): Promise<{ result: unknown }> {
+  const tabId = requireTab(_tabId);
   // Defense-in-depth (Phase 1 finding): cap evaluated code size.
   const code = params?.code;
   if (typeof code !== 'string') {
@@ -2465,8 +2489,9 @@ async function resizeWindow(
     width: number;
     height: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ resized: { width: number; height: number } }> {
+  const tabId = requireTab(_tabId);
   const { width, height } = params;
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) {
@@ -2479,8 +2504,9 @@ async function resizeWindow(
 
 async function readConsole(
   params: { pattern?: string },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ messages: Array<{ type: string; text: string }> }> {
+  const tabId = requireTab(_tabId);
   await enableConsoleObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
@@ -2505,8 +2531,9 @@ async function waitForApiResponse(
     pattern?: string;
     timeout_ms?: number;
   },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
+  const tabId = requireTab(_tabId);
   await enableNetworkObserver(tabId);
   const pattern = params?.pattern ?? '/api/config/';
   const deadline = Date.now() + (params?.timeout_ms ?? 15000);
@@ -2548,7 +2575,7 @@ async function waitForApiResponse(
 
 async function readNetwork(
   params: { pattern?: string },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{
   requests: Array<{
     method: string;
@@ -2556,6 +2583,7 @@ async function readNetwork(
     status: number | undefined;
   }>;
 }> {
+  const tabId = requireTab(_tabId);
   await enableNetworkObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
@@ -2578,7 +2606,8 @@ async function diagSuspension(): Promise<{ summary: unknown; events: DiagEvent[]
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,
  * annotated with the tenant/env each hop resolves to (Phase 0b login-topology). */
-async function captureLoginFlow(_params: unknown, tabId: number): Promise<{ hops: unknown[] }> {
+async function captureLoginFlow(_params: unknown, _tabId?: number): Promise<{ hops: unknown[] }> {
+  const tabId = requireTab(_tabId);
   await enableNetworkObserver(tabId);
   return { hops: extractRedirects(networkBuffer, sessionKeyFromUrl) };
 }
@@ -2605,10 +2634,11 @@ async function fileUpload(params: {
 async function browserBatch(
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   params: { actions: Array<{ tool: string; params: any }> },
-  tabId: number,
+  _tabId?: number,
 ): Promise<{
   results: Array<{ tool: string; content: unknown; is_error: boolean }>;
 }> {
+  const tabId = requireTab(_tabId);
   const actions = params?.actions ?? [];
   const results: Array<{ tool: string; content: unknown; is_error: boolean }> = [];
   for (const action of actions) {

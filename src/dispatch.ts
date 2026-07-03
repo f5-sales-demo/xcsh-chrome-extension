@@ -7,13 +7,13 @@
 
 import { validateToolParams } from './capabilities';
 
-export type ToolHandler = (params: unknown, tabId: number) => unknown | Promise<unknown>;
+export type ToolHandler = (params: unknown, tabId?: number) => unknown | Promise<unknown>;
 
 export async function runDispatch(
   tool: string,
   params: unknown,
   handlers: Record<string, ToolHandler>,
-  tabId: number,
+  tabId?: number,
 ): Promise<unknown> {
   const handler = handlers[tool];
   if (!handler) throw new Error(`unknown tool: ${tool}`);

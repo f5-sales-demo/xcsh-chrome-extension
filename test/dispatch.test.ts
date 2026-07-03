@@ -43,4 +43,33 @@ describe('runDispatch', () => {
     await runDispatch('ping', {}, handlers, 77);
     expect(seen).toBe(77);
   });
+
+  // Regression (T5 review, #135): with the tab unset (cold start / post-suspension),
+  // a tab-INDEPENDENT tool must still run — the caller no longer eager-gates on the tab.
+  it('runs a tab-independent handler when dispatched with an unset (undefined) tabId', async () => {
+    let ran = false;
+    const handlers: Record<string, ToolHandler> = {
+      ping: (_p, tabId) => {
+        ran = true;
+        return { ok: true, tabId };
+      },
+    };
+    // No 4th arg → tabId is undefined, exactly as at cold-start before navigate.
+    expect(await runDispatch('ping', {}, handlers)).toEqual({ ok: true, tabId: undefined });
+    expect(ran).toBe(true);
+  });
+
+  // Regression (T5 review, #135): a tab-USING handler that validates its tab param
+  // must still throw when dispatched with no tab — unchanged pre-Task-5 behavior.
+  it('lets a tab-using handler throw when dispatched with an unset (undefined) tabId', async () => {
+    // Mirror the SW's per-handler guard: validate on the PARAM, not a module global.
+    const requireTab = (tabId?: number): number => {
+      if (tabId === undefined) throw new Error('no target tab — call navigate first');
+      return tabId;
+    };
+    const handlers: Record<string, ToolHandler> = {
+      ping: (_p, tabId) => ({ ok: true, tabId: requireTab(tabId) }),
+    };
+    await expect(runDispatch('ping', {}, handlers)).rejects.toThrow('no target tab — call navigate first');
+  });
 });
