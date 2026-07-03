@@ -149,7 +149,18 @@ function correlatePortToTab(sourcePort: number, sid: string | null): void {
   }
   chrome.tabs.get(tabId).then(
     (t) => {
-      if (t?.id === tabId) portToTab.set(sourcePort, tabId);
+      // Re-check liveness + identity: the `get` was async, so the socket may have
+      // closed (onclose ran portToTab.delete) or the port may have been reused by
+      // a different session in the interim. Only bind if this is still the same
+      // OPEN connection that advertised this sid — otherwise a late stale insert
+      // could misroute a different worker's tool_request until it re-correlates.
+      if (
+        t?.id === tabId &&
+        sockets.get(sourcePort)?.readyState === WebSocket.OPEN &&
+        registry.get(sourcePort)?.sessionId === sid
+      ) {
+        portToTab.set(sourcePort, tabId);
+      }
     },
     () => {
       /* tab gone — leave this port unbound so tool_request refuses */
