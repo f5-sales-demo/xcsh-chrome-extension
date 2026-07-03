@@ -7,6 +7,8 @@ import { cleanup, render, waitFor } from '@testing-library/preact';
 // the interactive "load unpacked in Chrome" check (brief Step 5), which needs a
 // human + a running xcsh CLI bridge and cannot run headless. It only proves the
 // status/diagnostics/bridges shell mounts without a wiring/crash-on-mount error.
+// (The component lives in src/options/App; the src/options.tsx entry is kept
+// export-free so its bundle loads as a classic script — not tested here.)
 // Async reads resolve empty: sendMessage invokes its callback with undefined
 // (no lastError) and storage.local.get resolves {}.
 (globalThis as unknown as { chrome: unknown }).chrome = {
@@ -18,7 +20,7 @@ import { cleanup, render, waitFor } from '@testing-library/preact';
   storage: { local: { get: () => Promise.resolve({}) } },
 };
 
-const { Options } = await import('../../src/options.tsx');
+const { Options } = await import('../../src/options/App');
 
 afterEach(() => cleanup());
 
