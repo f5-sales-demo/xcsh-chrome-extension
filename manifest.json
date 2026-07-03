@@ -28,7 +28,7 @@
     "tabGroups",
     "nativeMessaging"
   ],
-  "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*"],
+  "host_permissions": ["https://*.volterra.us/*", "https://*.console.ves.volterra.io/*", "http://127.0.0.1/*"],
   "storage": {
     "managed_schema": "managed_schema.json"
   },

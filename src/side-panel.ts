@@ -659,7 +659,9 @@ async function sendMessage(): Promise<void> {
     }
   }, TURN_TIMEOUT_MS);
 
-  port.postMessage(buildChatRequest(turnId, text, attachContext ? latestContext : null, mode, conv.id));
+  // Stamp the panel's bound tab so the SW routes this turn to THIS tab's worker,
+  // not a global activePort (which could hit another tab's busy session — #33).
+  port.postMessage(buildChatRequest(turnId, text, attachContext ? latestContext : null, mode, conv.id, boundTabId));
 }
 
 function autosize(): void {

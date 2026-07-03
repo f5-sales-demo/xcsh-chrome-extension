@@ -22,3 +22,12 @@ export function resolveToolTab(sourcePort: number | undefined, portToTab: Map<nu
   if (sourcePort === undefined) return null;
   return portToTab.get(sourcePort) ?? null;
 }
+
+/** The bridge port a chat turn from the panel bound to `tabId` must go to — the
+ *  worker for THAT tab, never a global active-port fallback (which would route a
+ *  turn to another tab's worker and can hit its busy session). undefined when the
+ *  tab has no worker or the panel sent no tabId, so the caller refuses. */
+export function resolveChatPort(tabId: number | undefined, registry: Map<number, BridgeLike>): number | undefined {
+  if (tabId === undefined) return undefined;
+  return portForTab(registry, sidForTab(tabId));
+}

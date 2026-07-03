@@ -35,6 +35,7 @@ export interface ChatRequestMsg {
   context: unknown; // a PageContextSnapshot, passed through opaquely
   mode: InteractionMode;
   history_hint?: string;
+  tabId?: number; // the panel's bound tab, so the SW routes to THAT tab's worker (#33)
 }
 
 export interface ChatDeltaMsg {
@@ -85,9 +86,11 @@ export function buildChatRequest(
   context: unknown,
   mode: InteractionMode,
   historyHint?: string,
+  tabId?: number,
 ): ChatRequestMsg {
   const msg: ChatRequestMsg = { type: 'chat_request', id, text, context, mode };
   if (historyHint !== undefined) msg.history_hint = historyHint;
+  if (tabId !== undefined) msg.tabId = tabId;
   return msg;
 }
 
