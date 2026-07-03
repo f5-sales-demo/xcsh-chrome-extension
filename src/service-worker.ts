@@ -20,7 +20,7 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { portForTab, resolveToolTab, sidForTab } from './session-routing';
+import { portForTab, resolveChatPort, resolveToolTab, sidForTab } from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -863,12 +863,24 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
     if (m.type === 'chat_request') {
-      const target = activePort;
+      // Route to the worker for the PANEL'S OWN tab (m.tabId), never a global
+      // activePort — otherwise a turn from one tab lands on another tab's worker
+      // and can hit its busy session ("session busy"). Refuse if that tab has no
+      // worker, exactly like the tool path. See resolveChatPort / #33.
+      //
+      // Security: m.tabId comes from the side panel, NOT port.sender.tab — a side
+      // panel is an extension page with no sender.tab, so no runtime-verified tab
+      // exists to use instead. This is safe because the 'xcsh-chat' port is
+      // reachable only by first-party extension contexts (no externally_connectable;
+      // content scripts never open it), so the sender is our own trusted panel; and
+      // resolveChatPort refuses any tabId lacking a live bound worker, so a stray id
+      // routes nowhere.
+      const target = resolveChatPort(typeof m.tabId === 'number' ? m.tabId : undefined, registry);
       if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
         port.postMessage({
           type: 'chat_error',
           id: m.id,
-          error: 'No xcsh running for this tenant — start the xcsh CLI in that context',
+          error: 'No xcsh running for this tab — open the F5 console tab and ensure xcsh is running',
         });
         return;
       }

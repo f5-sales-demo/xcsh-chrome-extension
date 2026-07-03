@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { portForTab, resolveToolTab, sidForTab } from '../src/session-routing';
+import { portForTab, resolveChatPort, resolveToolTab, sidForTab } from '../src/session-routing';
 
 describe('sidForTab', () => {
   test('derives a stable sid from tabId', () => {
@@ -28,5 +28,19 @@ describe('resolveToolTab', () => {
   test('returns null for an unbound / unknown source (never a fallback)', () => {
     expect(resolveToolTab(19999, portToTab)).toBeNull();
     expect(resolveToolTab(undefined, portToTab)).toBeNull();
+  });
+});
+describe('resolveChatPort', () => {
+  const reg = new Map([
+    [19222, { sessionId: 'tab-1' }],
+    [19223, { sessionId: 'tab-2' }],
+  ]);
+  test("routes a chat turn to the worker for the panel's OWN tab", () => {
+    expect(resolveChatPort(1, reg)).toBe(19222);
+    expect(resolveChatPort(2, reg)).toBe(19223);
+  });
+  test('undefined for an unbound tab or missing tabId (caller refuses; never a global activePort fallback)', () => {
+    expect(resolveChatPort(9, reg)).toBeUndefined();
+    expect(resolveChatPort(undefined, reg)).toBeUndefined();
   });
 });
