@@ -84,8 +84,19 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
           active: null,
         };
       }
-      // chat_error
-      return { ...s, active: null };
+      // chat_error — replace the streaming bubble with a visible error block
+      // (old side-panel.ts:594–605), mirroring markAborted's aborted-flag shape.
+      const errText = turn.error ?? (a.msg as { error?: string }).error ?? 'Unknown error';
+      const msgId = s.active.msgId;
+      return {
+        ...s,
+        conv: {
+          ...s.conv,
+          updatedAt: at,
+          messages: s.conv.messages.map((m) => (m.id === msgId ? { ...m, text: errText, aborted: true } : m)),
+        },
+        active: null,
+      };
     }
     default:
       return s;

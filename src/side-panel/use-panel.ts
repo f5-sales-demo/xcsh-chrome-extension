@@ -226,6 +226,30 @@ export function usePanel() {
   function sendMessage(text: string) {
     const s = stateRef.current;
     if (s.inputBlocked || !text || s.active) return;
+    // Disconnected fast-path (old side-panel.ts:619–627): append the user message
+    // and an instant error notice, persist, and return WITHOUT beginning a turn —
+    // otherwise a disconnected send hangs for the full 30s turn timeout.
+    if (!s.connected) {
+      let conv = appendUserMessage(s.conv, {
+        id: `u-${crypto.randomUUID()}`,
+        role: 'user',
+        text,
+        at: now(),
+        context: s.attachContext && s.contextMeta ? s.contextMeta : undefined,
+      });
+      conv = startAssistant(conv, `a-${crypto.randomUUID()}`, now());
+      conv = {
+        ...conv,
+        messages: conv.messages.map((m, i) =>
+          i === conv.messages.length - 1
+            ? { ...m, text: 'xcsh not connected — start the xcsh CLI, then resend.', aborted: true }
+            : m,
+        ),
+      };
+      dispatch({ type: 'set_conv', conv });
+      saveConversation(conv).catch(() => {});
+      return;
+    }
     const userMsgId = `u-${crypto.randomUUID()}`;
     let conv = appendUserMessage(s.conv, {
       id: userMsgId,

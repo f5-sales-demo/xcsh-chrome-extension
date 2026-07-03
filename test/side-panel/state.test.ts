@@ -27,6 +27,17 @@ describe('panelReducer', () => {
     expect(s.active).toBeNull();
   });
 
+  it('surfaces chat_error as an aborted assistant message', () => {
+    let s = base();
+    s = { ...s, conv: startAssistant(s.conv, 'a1', 0) };
+    s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1' });
+    s = panelReducer(s, { type: 'stream', msg: { type: 'chat_error', id: 't1', error: 'boom' }, at: 5 });
+    expect(s.active).toBeNull();
+    const msg = s.conv.messages.find((m) => m.id === 'a1');
+    expect(msg?.aborted).toBe(true);
+    expect(msg?.text).toBe('boom');
+  });
+
   it('derives context-chip text', () => {
     let s = panelReducer(base(), { type: 'page_context', meta: { title: 'Load Balancers' }, snapshot: {} });
     expect(contextChipText(s)).toBe('Load Balancers');
