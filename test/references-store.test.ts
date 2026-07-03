@@ -157,6 +157,18 @@ describe('SessionIndex (per-tenant session map)', () => {
     expect(tabSessionKey(idx, 11)).toBe('acme|staging');
     expect(tenantConv(idx, 'acme|staging')).toBe('conv-a'); // conv persists for tab 11 / future tabs
   });
+  it('prunes the per-tab byTenant entry on close, leaving other tabs untouched', () => {
+    // Per-tab keying (#136): each tab has a DISTINCT conv key "tenant|env#tabId".
+    let idx = setTenantConv(emptySessionIndex(), 'acme|staging#10', 10, 'conv-a10');
+    idx = setTenantConv(idx, 'acme|staging#11', 11, 'conv-a11');
+    idx = removeTabSession(idx, 10);
+    // the closed tab's reverse mapping AND its orphan-prone byTenant entry are gone
+    expect(tabSessionKey(idx, 10)).toBeUndefined();
+    expect(tenantConv(idx, 'acme|staging#10')).toBeUndefined();
+    // the other tab's mapping and conversation are untouched
+    expect(tabSessionKey(idx, 11)).toBe('acme|staging#11');
+    expect(tenantConv(idx, 'acme|staging#11')).toBe('conv-a11');
+  });
   it('migrates an old TabIndex using resolved session keys', () => {
     const idx = sessionIndexFromTabIndex([
       { tabId: 5, sessionKey: 'acme|staging', convId: 'conv-old-5' },
