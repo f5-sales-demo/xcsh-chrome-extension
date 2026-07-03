@@ -348,17 +348,15 @@ const pendingApi = new Map<
   { tabId: number; url: string; status: number; resourceType: string | null; mimeType?: string }
 >();
 
-async function enableConsoleObserver(): Promise<void> {
+async function enableConsoleObserver(tabId: number): Promise<void> {
   if (observingConsole) return;
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable', {});
   observingConsole = true;
 }
 
-async function enableNetworkObserver(): Promise<void> {
+async function enableNetworkObserver(tabId: number): Promise<void> {
   if (observingNetwork) return;
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   await chrome.debugger.sendCommand({ tabId }, 'Network.enable', {});
   observingNetwork = true;
@@ -642,7 +640,10 @@ function onMessage(msg: any, sourcePort: number): void {
 
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
-    runTool(tool, params)
+    // TEMPORARY (Task 6 replaces the source): dispatch still carries the single
+    // global targetTabId, wrapped in requireTab so an unset tab errors as before.
+    Promise.resolve()
+      .then(() => runTool(tool, params, requireTab(targetTabId)))
       .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
       .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
@@ -806,13 +807,13 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'get_page_context') {
-      buildPageContext()
+      buildPageContext(targetTabId)
         .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
         .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
       return;
     }
     if (m.type === 'chat_annotate') {
-      chatAnnotate(m).catch(() => {});
+      chatAnnotate(m, targetTabId).catch(() => {});
       return;
     }
     if (m.type === 'status_request') {
@@ -851,7 +852,7 @@ chrome.runtime.onConnect.addListener((port) => {
 /** Stop the agent: detach the debugger and hide the on-page indicator. */
 function stopAgent(): void {
   if (targetTabId !== undefined) {
-    detach().catch(() => {});
+    detach(undefined, targetTabId).catch(() => {});
   }
   // Hide the visual indicator on all scoped console tabs.
   chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS }).then((tabs) => {
@@ -866,7 +867,7 @@ function stopAgent(): void {
 // --- Tool implementations --------------------------------------------------
 
 // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function runTool(tool: string, params: any): Promise<unknown> {
+async function runTool(tool: string, params: any, tabId: number): Promise<unknown> {
   // Pulse the on-page indicator while any non-trivial tool runs. `ping`,
   // `capabilities`, and `set_explain_mode` take no page action, so they stay silent.
   const broadcastsIndicator = tool !== 'ping' && tool !== 'capabilities' && tool !== 'set_explain_mode';
@@ -879,7 +880,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
   let ok = true;
   inFlightCount++;
   try {
-    const result = await dispatchTool(tool, params);
+    const result = await dispatchTool(tool, params, tabId);
     return result;
   } catch (e) {
     ok = false;
@@ -905,7 +906,7 @@ async function runTool(tool: string, params: any): Promise<unknown> {
 // Dispatch runs through `runDispatch`, which validates params against the contract
 // before invoking the handler — so the schema is load-bearing, not just docs.
 // biome-ignore lint/suspicious/noExplicitAny: handlers receive contract-validated params
-const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>> = {
+const TOOL_HANDLERS: Record<string, (params: any, tabId: number) => unknown | Promise<unknown>> = {
   ping: () => ({ ok: true, version: VERSION }),
   capabilities: () => buildCapabilities(VERSION),
   set_bridge_port: (params: { port: number }) => {
@@ -933,9 +934,8 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
     chrome.runtime.reload();
     return { reloading: true };
   },
-  debug_exec: () => {
+  debug_exec: (_params: unknown, tabId: number) => {
     // Diagnostic: test if __xcshReadAx is available via the debugger path.
-    const tabId = requireTab();
     return evalInPage(tabId, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
   },
   navigate,
@@ -978,7 +978,7 @@ const TOOL_HANDLERS: Record<string, (params: any) => unknown | Promise<unknown>>
   detach,
   set_explain_mode: setExplainMode,
   annotate,
-  get_page_context: () => buildPageContext(),
+  get_page_context: (_params: unknown, tabId: number) => buildPageContext(tabId),
 };
 
 // Fail fast (at SW load) if the dispatch map and the published contract diverge —
@@ -990,8 +990,8 @@ for (const name of toolNames()) {
   if (!(name in TOOL_HANDLERS)) throw new Error(`tool "${name}" is described but has no handler`);
 }
 
-function dispatchTool(tool: string, params: unknown): Promise<unknown> {
-  return runDispatch(tool, params, TOOL_HANDLERS);
+function dispatchTool(tool: string, params: unknown, tabId: number): Promise<unknown> {
+  return runDispatch(tool, params, TOOL_HANDLERS, tabId);
 }
 
 async function navigate(params: { url: string }): Promise<{ tabId: number }> {
@@ -1388,11 +1388,11 @@ function waitForNavigation(tabId: number): Promise<void> {
   });
 }
 
-function requireTab(): number {
-  if (targetTabId === undefined) {
+function requireTab(tabId?: number): number {
+  if (tabId === undefined) {
     throw new Error('no target tab — call navigate first');
   }
-  return targetTabId;
+  return tabId;
 }
 
 /**
@@ -1602,8 +1602,7 @@ async function neutralizeBeforeunload(tabId: number): Promise<void> {
 }
 
 /** Run `__xcshReadAx()` in the target tab and return the AX tree. */
-async function readAxFromTab(): Promise<AxNode> {
-  const tabId = requireTab();
+async function readAxFromTab(tabId: number): Promise<AxNode> {
   // chrome.scripting.executeScript HANGS on the heavy XC SPA (confirmed: 30s+
   // timeout while chrome.debugger Runtime.evaluate returns in 13ms on the same
   // page). Route ALL page reads through the debugger instead.
@@ -1640,15 +1639,18 @@ async function readAxFromTab(): Promise<AxNode> {
   throw new Error('read_ax: __xcshReadAx not available via debugger (page may still be loading)');
 }
 
-async function readAx(): Promise<unknown> {
-  return readAxFromTab();
+async function readAx(_params: unknown, tabId: number): Promise<unknown> {
+  return readAxFromTab(tabId);
 }
 
-async function waitFor(params: {
-  selector: string;
-  context?: string;
-  timeoutMs?: number;
-}): Promise<{ found: true; ref: string }> {
+async function waitFor(
+  params: {
+    selector: string;
+    context?: string;
+    timeoutMs?: number;
+  },
+  tabId: number,
+): Promise<{ found: true; ref: string }> {
   // TODO: context scoping — `context` is ignored in Phase 1; a plain matchNode
   // suffices. Phase 2 adds scoped resolution via findSectionContainer.
   const selector = params?.selector;
@@ -1656,7 +1658,7 @@ async function waitFor(params: {
   const loc = parseLocator(selector);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const tree = await readAxFromTab();
+    const tree = await readAxFromTab(tabId);
     try {
       const node = matchNode(tree, loc);
       return { found: true, ref: node.ref as string };
@@ -1667,15 +1669,17 @@ async function waitFor(params: {
   throw new Error(`wait_for "${selector}" timed out after ${timeoutMs}ms`);
 }
 
-async function assertText(params: {
-  selector: string;
-  expected: string;
-  context?: string;
-}): Promise<{ asserted: true; text: string }> {
+async function assertText(
+  params: {
+    selector: string;
+    expected: string;
+    context?: string;
+  },
+  tabId: number,
+): Promise<{ asserted: true; text: string }> {
   // TODO: context scoping — `context` is ignored in Phase 1.
-  const tabId = requireTab();
   const { selector, expected } = params;
-  const tree = await readAxFromTab();
+  const tree = await readAxFromTab(tabId);
   const node = matchNode(tree, parseLocator(selector));
   // The matched AX node's accessible name often already contains the text;
   // fall back to the element's innerText (content script) for a full check.
@@ -1692,10 +1696,12 @@ async function assertText(params: {
   return { asserted: true, text: text.slice(0, 200) };
 }
 
-async function queryDom(params: {
-  selector: string;
-}): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
-  const tabId = requireTab();
+async function queryDom(
+  params: {
+    selector: string;
+  },
+  tabId: number,
+): Promise<{ found: boolean; nodeId?: number; text?: string; tag?: string }> {
   await ensureDebuggerAttached(tabId);
   try {
     const doc = (await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: 0 })) as {
@@ -1734,11 +1740,14 @@ async function queryDom(params: {
   }
 }
 
-async function find(params: {
-  selector: string;
-}): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
+async function find(
+  params: {
+    selector: string;
+  },
+  tabId: number,
+): Promise<{ refs: Array<{ ref: string; role: string; name: string }> }> {
   const { selector } = params;
-  const tree = await readAxFromTab();
+  const tree = await readAxFromTab(tabId);
   const nodes = matchNodes(tree, parseLocator(selector));
   return {
     refs: nodes.slice(0, 20).map((n) => ({
@@ -1828,10 +1837,9 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
 }
 
 /** Build the page-context snapshot for the active console tab. */
-async function buildPageContext(): Promise<unknown> {
-  const tabId = targetTabId;
+async function buildPageContext(tabId: number | undefined): Promise<unknown> {
   if (tabId === undefined) return null; // no controlled console tab — panel shows inactive
-  await enableNetworkObserver();
+  await enableNetworkObserver(tabId);
   let url = '';
   let title = '';
   try {
@@ -1843,7 +1851,7 @@ async function buildPageContext(): Promise<unknown> {
   }
   let ax: AxLike | null = null;
   try {
-    ax = (await readAxFromTab()) as unknown as AxLike;
+    ax = (await readAxFromTab(tabId)) as unknown as AxLike;
   } catch {
     /* page still loading */
   }
@@ -1856,16 +1864,18 @@ async function buildPageContext(): Promise<unknown> {
  * by explain mode, because a chat-initiated highlight is an explicit, user-facing
  * request. The fast-automation `annotate` tool keeps its "off by default" gate.
  */
-async function chatAnnotate(spec: {
-  kind?: string;
-  ref?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}): Promise<void> {
-  if (targetTabId === undefined) return;
-  const tabId = targetTabId;
+async function chatAnnotate(
+  spec: {
+    kind?: string;
+    ref?: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  },
+  tabId: number | undefined,
+): Promise<void> {
+  if (tabId === undefined) return;
   const kind = spec.kind ?? 'highlight';
   if (kind === 'highlight') {
     let rect: { x: number; y: number; w: number; h: number } | undefined;
@@ -1889,18 +1899,20 @@ async function chatAnnotate(spec: {
  * an explicit rect or a `ref` we resolve to its border box here (the same ref the
  * agent uses to click); `fingerprint` takes a point.
  */
-async function annotate(params: {
-  kind?: string;
-  ref?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}): Promise<unknown> {
+async function annotate(
+  params: {
+    kind?: string;
+    ref?: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+  },
+  tabId: number,
+): Promise<unknown> {
   const kind = params?.kind;
   if (!kind) throw new Error('annotate: kind is required');
   if (!explainMode) return { skipped: true, reason: 'explain mode off' };
-  const tabId = requireTab();
 
   if (kind === 'highlight') {
     let rect: { x: number; y: number; w: number; h: number } | undefined;
@@ -1957,8 +1969,7 @@ async function resolveRectByRef(
   }
 }
 
-async function click(params: { ref: string }): Promise<{ clicked: string; x: number; y: number }> {
-  const tabId = requireTab();
+async function click(params: { ref: string }, tabId: number): Promise<{ clicked: string; x: number; y: number }> {
   const ref = params?.ref;
   if (!ref) throw new Error('click: ref is required');
   // Resolve the ref → live element handle, then click via the deterministic
@@ -1977,11 +1988,13 @@ async function click(params: { ref: string }): Promise<{ clicked: string; x: num
  * role selectors, or a portal-option finder. We hold the element handle and click
  * via the layout-engine + hit-test path. `wait_ms` polls for the element to appear
  * (CDK portals render async). Never silently mis-clicks: occlusion fails loudly. */
-async function clickElement(params: {
-  js: string;
-  wait_ms?: number;
-}): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
-  const tabId = requireTab();
+async function clickElement(
+  params: {
+    js: string;
+    wait_ms?: number;
+  },
+  tabId: number,
+): Promise<{ clicked: string; x: number; y: number; hit: boolean }> {
   const js = params?.js;
   if (typeof js !== 'string' || js.length === 0) throw new Error('click_element: js is required');
   const waitMs = Math.min(Number(params?.wait_ms ?? 0), 20_000);
@@ -2000,8 +2013,10 @@ async function clickElement(params: {
 /** Trusted click at explicit viewport coordinates. Lets callers act on elements
  * located via `javascript_tool` (getBoundingClientRect) WITHOUT a `read_ax` ref
  * — essential on heavy pages (e.g. the create form) where read_ax cannot run. */
-async function clickXy(params: { x: number; y: number }): Promise<{ clicked: string; x: number; y: number }> {
-  const tabId = requireTab();
+async function clickXy(
+  params: { x: number; y: number },
+  tabId: number,
+): Promise<{ clicked: string; x: number; y: number }> {
   const x = Number(params?.x);
   const y = Number(params?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('click_xy: numeric x and y are required');
@@ -2013,8 +2028,7 @@ async function clickXy(params: { x: number; y: number }): Promise<{ clicked: str
  * `.value`, this fires genuine trusted `input` events, so Angular's
  * ControlValueAccessor commits the value to the reactive form model — the
  * authentic "human typing" path, robust to vsui value-descriptor patching. */
-async function typeText(params: { text: string }): Promise<{ typed: string }> {
-  const tabId = requireTab();
+async function typeText(params: { text: string }, tabId: number): Promise<{ typed: string }> {
   const text = params?.text;
   if (typeof text !== 'string') throw new Error('type_text: text is required');
   await ensureDebuggerAttached(tabId);
@@ -2028,13 +2042,15 @@ async function typeText(params: { text: string }): Promise<{ typed: string }> {
  * through `evaluateWithRecovery`, which detaches/reattaches the debugger and kills
  * input focus, closing the CDK portal. Here we ONLY use plain `evalInPage`
  * (Runtime.evaluate, no detach) and trusted `Input.*` CDP commands. */
-async function labelSelect(params: {
-  selector: string;
-  value: string;
-  label_value?: string;
-  wait_ms?: number;
-}): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
-  const tabId = requireTab();
+async function labelSelect(
+  params: {
+    selector: string;
+    value: string;
+    label_value?: string;
+    wait_ms?: number;
+  },
+  tabId: number,
+): Promise<{ selected: string; matchedKind: string; value: string; labelValue: string; optionCount: number }> {
   const selector = params?.selector;
   const value = params?.value ?? '';
   const labelValue = params?.label_value ?? '';
@@ -2211,12 +2227,11 @@ async function labelSelect(params: {
   };
 }
 
-async function screenshot(): Promise<{ data: string; format: string }> {
+async function screenshot(_params: unknown, tabId: number): Promise<{ data: string; format: string }> {
   // captureVisibleTab freezes the MV3 service worker's event loop on this
   // 3024x1964 retina Mac (even q5), blocking ALL subsequent bridge requests.
   // Use the debugger's Runtime.evaluate to capture a downscaled canvas screenshot
   // instead — this runs in the page (no SW freeze) and produces a small JPEG.
-  const tabId = requireTab();
   await ensureDebuggerAttached(tabId);
   const data = await evalInPage<string>(
     tabId,
@@ -2245,8 +2260,10 @@ async function screenshot(): Promise<{ data: string; format: string }> {
   return { data, format: 'jpeg' };
 }
 
-async function formInput(params: { ref: string; value: string }): Promise<{ filled: string; value: string }> {
-  const tabId = requireTab();
+async function formInput(
+  params: { ref: string; value: string },
+  tabId: number,
+): Promise<{ filled: string; value: string }> {
   const ref = params?.ref;
   const value = params?.value;
   if (!ref) throw new Error('form_input: ref is required');
@@ -2267,8 +2284,7 @@ const SPECIAL_KEYS: Record<string, { key: string; code: string; keyCode: number 
   Space: { key: ' ', code: 'Space', keyCode: 32 },
 };
 
-async function keyPress(params: { key: string }): Promise<{ pressed: string }> {
-  const tabId = requireTab();
+async function keyPress(params: { key: string }, tabId: number): Promise<{ pressed: string }> {
   const key = params?.key;
   if (typeof key !== 'string' || key.length === 0) {
     throw new Error('key_press: key is required');
@@ -2304,8 +2320,7 @@ async function keyPress(params: { key: string }): Promise<{ pressed: string }> {
   return { pressed: key };
 }
 
-async function detach(): Promise<{ detached: true }> {
-  const tabId = requireTab();
+async function detach(_params: unknown, tabId: number): Promise<{ detached: true }> {
   await chrome.debugger.detach({ tabId }).catch(() => {});
   attachedTabs.delete(tabId);
   return { detached: true };
@@ -2313,8 +2328,10 @@ async function detach(): Promise<{ detached: true }> {
 
 // --- Content-script-backed tools -------------------------------------------
 
-async function selectOption(params: { ref: string; value: string }): Promise<{ selected: string; ref: string }> {
-  const tabId = requireTab();
+async function selectOption(
+  params: { ref: string; value: string },
+  tabId: number,
+): Promise<{ selected: string; ref: string }> {
   const { ref, value } = params;
   if (!ref) throw new Error('select_option: ref is required');
   const ok = await evalInPage<boolean>(
@@ -2325,16 +2342,14 @@ async function selectOption(params: { ref: string; value: string }): Promise<{ s
   return { selected: value, ref };
 }
 
-async function scrollTo(params: { ref: string }): Promise<{ scrolled: string }> {
-  const tabId = requireTab();
+async function scrollTo(params: { ref: string }, tabId: number): Promise<{ scrolled: string }> {
   const { ref } = params;
   if (!ref) throw new Error('scroll_to: ref is required');
   await evalInPage<void>(tabId, `typeof __xcshScrollTo==='function'&&__xcshScrollTo(${JSON.stringify(ref)})`);
   return { scrolled: ref };
 }
 
-async function getPageText(): Promise<{ text: string }> {
-  const tabId = requireTab();
+async function getPageText(_params: unknown, tabId: number): Promise<{ text: string }> {
   // Use Runtime.evaluate via the debugger (MAIN world) — the content-script
   // ISOLATED-world read returned empty on the XC SPA, but the MAIN-world
   // document.body.innerText has the rendered text.
@@ -2348,8 +2363,7 @@ async function getPageText(): Promise<{ text: string }> {
 
 // --- JavaScript evaluation (domain-scoped) ---------------------------------
 
-async function javascriptTool(params: { code: string }): Promise<{ result: unknown }> {
-  const tabId = requireTab();
+async function javascriptTool(params: { code: string }, tabId: number): Promise<{ result: unknown }> {
   // Defense-in-depth (Phase 1 finding): cap evaluated code size.
   const code = params?.code;
   if (typeof code !== 'string') {
@@ -2446,11 +2460,13 @@ async function tabsClose(params: { tabId: number }): Promise<{ closed: number }>
   return { closed: tabId };
 }
 
-async function resizeWindow(params: {
-  width: number;
-  height: number;
-}): Promise<{ resized: { width: number; height: number } }> {
-  const tabId = requireTab();
+async function resizeWindow(
+  params: {
+    width: number;
+    height: number;
+  },
+  tabId: number,
+): Promise<{ resized: { width: number; height: number } }> {
   const { width, height } = params;
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) {
@@ -2461,8 +2477,11 @@ async function resizeWindow(params: {
 
 // --- Diagnostic reads (console / network) ----------------------------------
 
-async function readConsole(params: { pattern?: string }): Promise<{ messages: Array<{ type: string; text: string }> }> {
-  await enableConsoleObserver();
+async function readConsole(
+  params: { pattern?: string },
+  tabId: number,
+): Promise<{ messages: Array<{ type: string; text: string }> }> {
+  await enableConsoleObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   let entries = consoleBuffer.map((e: any) => ({
@@ -2481,11 +2500,14 @@ async function readConsole(params: { pattern?: string }): Promise<{ messages: Ar
  * `/api/config/namespaces/.../` on save — this watches for that response
  * and returns immediately with the status code + any error body.
  */
-async function waitForApiResponse(params: {
-  pattern?: string;
-  timeout_ms?: number;
-}): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
-  await enableNetworkObserver();
+async function waitForApiResponse(
+  params: {
+    pattern?: string;
+    timeout_ms?: number;
+  },
+  tabId: number,
+): Promise<{ found: boolean; status?: number; url?: string; error?: string }> {
+  await enableNetworkObserver(tabId);
   const pattern = params?.pattern ?? '/api/config/';
   const deadline = Date.now() + (params?.timeout_ms ?? 15000);
   const startIdx = networkBuffer.length; // only check NEW entries
@@ -2506,7 +2528,6 @@ async function waitForApiResponse(params: {
       if (status >= 400) {
         let error = `HTTP ${status}`;
         try {
-          const tabId = requireTab();
           const body = (await chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', {
             requestId: e.requestId,
           })) as { body?: string };
@@ -2525,14 +2546,17 @@ async function waitForApiResponse(params: {
   return { found: false, error: 'no matching API response within timeout' };
 }
 
-async function readNetwork(params: { pattern?: string }): Promise<{
+async function readNetwork(
+  params: { pattern?: string },
+  tabId: number,
+): Promise<{
   requests: Array<{
     method: string;
     url: string | undefined;
     status: number | undefined;
   }>;
 }> {
-  await enableNetworkObserver();
+  await enableNetworkObserver(tabId);
   const pattern = params?.pattern;
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   let entries = networkBuffer.map((e: any) => ({
@@ -2554,8 +2578,8 @@ async function diagSuspension(): Promise<{ summary: unknown; events: DiagEvent[]
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,
  * annotated with the tenant/env each hop resolves to (Phase 0b login-topology). */
-async function captureLoginFlow(): Promise<{ hops: unknown[] }> {
-  await enableNetworkObserver();
+async function captureLoginFlow(_params: unknown, tabId: number): Promise<{ hops: unknown[] }> {
+  await enableNetworkObserver(tabId);
   return { hops: extractRedirects(networkBuffer, sessionKeyFromUrl) };
 }
 
@@ -2578,15 +2602,18 @@ async function fileUpload(params: {
 
 // --- Batch ------------------------------------------------------------------
 
-// biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-async function browserBatch(params: { actions: Array<{ tool: string; params: any }> }): Promise<{
+async function browserBatch(
+  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
+  params: { actions: Array<{ tool: string; params: any }> },
+  tabId: number,
+): Promise<{
   results: Array<{ tool: string; content: unknown; is_error: boolean }>;
 }> {
   const actions = params?.actions ?? [];
   const results: Array<{ tool: string; content: unknown; is_error: boolean }> = [];
   for (const action of actions) {
     try {
-      const content = await runTool(action.tool, action.params);
+      const content = await runTool(action.tool, action.params, tabId);
       results.push({ tool: action.tool, content, is_error: false });
     } catch (e) {
       results.push({ tool: action.tool, content: String(e), is_error: true });
