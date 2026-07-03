@@ -20,7 +20,7 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { hasNoRemainingTenantTab, shouldProvision } from './nm-bootstrap';
+import { portForTab, resolveToolTab, sidForTab } from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -126,6 +126,41 @@ let activePort: number | undefined;
 const knownPorts = new Set<number>();
 // Per-port fast-reconnect timers (coalesced), replacing the single-socket timer.
 const fastReconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
+// sourcePort → tabId: the tab each worker socket is BOUND to. Derived from the
+// worker's per-tab sid (hello_ack.sessionId === sidForTab(tabId)) and validated
+// against a live tab, so a `tool_request` routes to that worker's OWN tab and
+// never a fallback. Recomputable (no persistence): rebuilt as hello_acks arrive;
+// entries are cleared when the socket closes or the tab is removed.
+const portToTab = new Map<number, number>();
+
+/** Correlate a worker socket to the tab its per-tab sid names, but ONLY if that
+ *  tab is currently open — so we never bind a port to a dead tab. `sid` is
+ *  `sidForTab(tabId)` (`"tab-<id>"`); parse the id, then confirm the tab exists. */
+function correlatePortToTab(sourcePort: number, sid: string | null): void {
+  if (!sid) return;
+  const m = /^tab-(\d+)$/.exec(sid);
+  if (!m) return;
+  const tabId = Number(m[1]);
+  if (sid !== sidForTab(tabId)) return; // sanity: parsed id must round-trip
+  // Authoritative open-tab check; a tracked tenant tab is the fast path.
+  if (tabSessionKeys.has(tabId)) {
+    portToTab.set(sourcePort, tabId);
+    return;
+  }
+  chrome.tabs.get(tabId).then(
+    (t) => {
+      if (t?.id === tabId) portToTab.set(sourcePort, tabId);
+    },
+    () => {
+      /* tab gone — leave this port unbound so tool_request refuses */
+    },
+  );
+}
+
+/** Drop any portToTab entry that maps to `tabId` (tab closed / re-tenanted). */
+function clearPortForTab(tabId: number): void {
+  for (const [port, t] of portToTab) if (t === tabId) portToTab.delete(port);
+}
 
 // --- Native-messaging bootstrap (auto-provisioning) ------------------------
 // A single native-messaging port to the xcsh chrome-host. When a focused tenant
@@ -506,16 +541,26 @@ function ensureTenantSocket(sessionKey: string | null): void {
   if (portForTenant(registry, sessionKey) === undefined) scanRange();
 }
 
-/** Point the active socket at a tenant's bridge — only when idle, so an
- * in-flight turn keeps routing to the socket it started on (Phase-3 pinning). */
-function setActiveTenant(sessionKey: string | null): void {
+/** Point the active socket at the FOCUSED tab's own worker — only when idle, so
+ * an in-flight turn keeps routing to the socket it started on (Phase-3 pinning).
+ * Per-tab: provisioning and activePort are keyed by the tab's sid, not the
+ * tenant, so two tabs of the same tenant each get their own worker. */
+function setActiveTenant(sessionKey: string | null, tabId?: number): void {
   if (isInFlight() || turnToPort.size > 0) return; // a turn owns routing
   ensureTenantSocket(sessionKey);
-  activePort = portForTenant(registry, sessionKey);
-  // No bridge for the focused tenant → ask the manager to spawn a worker; the
-  // scan (already kicked by ensureTenantSocket) discovers its port and routes.
-  if (shouldProvision(sessionKey, activePort, manualPortPinned)) {
-    nmSend({ type: 'provision', tenantKey: sessionKey });
+  // The active socket is the focused tab's OWN worker (fall back to the tenant
+  // lookup only when no tab id is available, e.g. legacy callers).
+  activePort = tabId !== undefined ? portForTab(registry, sidForTab(tabId)) : portForTenant(registry, sessionKey);
+  // No worker for the focused tab → ask the manager to spawn one keyed by the
+  // tab's sid; the scan discovers its port and routes.
+  if (
+    tabId !== undefined &&
+    sessionKey !== null &&
+    sessionKey !== '' &&
+    !manualPortPinned &&
+    portForTab(registry, sidForTab(tabId)) === undefined
+  ) {
+    nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
   }
 }
 
@@ -551,6 +596,7 @@ function connectPort(port: number): void {
       const isPinned = manualPortPinned && port === bridgePort;
       if (sockets.get(port) === sock) sockets.delete(port);
       registry.delete(port);
+      portToTab.delete(port); // this worker's tab binding dies with its socket
       recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
       if (!anyOpen()) failActiveTurns('bridge disconnected');
@@ -620,6 +666,9 @@ function onMessage(msg: any, sourcePort: number): void {
       lastSeen: Date.now(),
     };
     registry.set(sourcePort, info);
+    // Bind this worker socket to the tab its per-tab sid names (validated open),
+    // so tool_request from this port dispatches to that worker's OWN tab.
+    correlatePortToTab(sourcePort, info.sessionId);
     knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
     // Legacy single-session mirror (still used by the connection-dot tooltip).
     sessionTenant = info.tenant;
@@ -640,12 +689,16 @@ function onMessage(msg: any, sourcePort: number): void {
 
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
-    // TEMPORARY (Task 6 replaces the source): dispatch still carries the single
-    // global targetTabId, passed RAW (may be undefined). Tab-independent tools
-    // (navigate, ping, tabs_*, …) run regardless; tab-using handlers validate the
-    // param themselves via requireTab — so `navigate` still works cold-start.
+    // THE fix: dispatch to the tab BOUND to this worker's socket — never the
+    // global targetTabId. An unbound source (no live hello_ack correlation) is
+    // refused, so a worker can only ever drive its own tab.
+    const boundTab = resolveToolTab(sourcePort, portToTab);
+    if (boundTab === null) {
+      sendTo(sourcePort, { type: 'tool_result', id, content: 'no bound tab for this session', is_error: true });
+      return;
+    }
     Promise.resolve()
-      .then(() => runTool(tool, params, targetTabId))
+      .then(() => runTool(tool, params, boundTab))
       .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
       .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
@@ -873,8 +926,11 @@ async function runTool(tool: string, params: any, tabId?: number): Promise<unkno
   // Pulse the on-page indicator while any non-trivial tool runs. `ping`,
   // `capabilities`, and `set_explain_mode` take no page action, so they stay silent.
   const broadcastsIndicator = tool !== 'ping' && tool !== 'capabilities' && tool !== 'set_explain_mode';
-  if (broadcastsIndicator && targetTabId !== undefined) {
-    chrome.tabs.sendMessage(targetTabId, { type: 'indicator_show' }).catch(() => {});
+  // Target the BOUND tab for this dispatch (falls back to the global only for
+  // callers that pass no tab), so the indicator pulses on the worker's own tab.
+  const indicatorTab = tabId ?? targetTabId;
+  if (broadcastsIndicator && indicatorTab !== undefined) {
+    chrome.tabs.sendMessage(indicatorTab, { type: 'indicator_show' }).catch(() => {});
   }
   // Trivial tools excluded from the chat_tool_notice indicator.
   const excludedFromNotice =
@@ -889,8 +945,8 @@ async function runTool(tool: string, params: any, tabId?: number): Promise<unkno
     throw e;
   } finally {
     inFlightCount--;
-    if (broadcastsIndicator && targetTabId !== undefined) {
-      chrome.tabs.sendMessage(targetTabId, { type: 'indicator_hide' }).catch(() => {});
+    if (broadcastsIndicator && indicatorTab !== undefined) {
+      chrome.tabs.sendMessage(indicatorTab, { type: 'indicator_hide' }).catch(() => {});
     }
     // Best-effort chat_tool_notice: if exactly one chat turn is active, notify its port.
     if (!excludedFromNotice && turnToPort.size === 1) {
@@ -999,7 +1055,7 @@ function dispatchTool(tool: string, params: unknown, tabId?: number): Promise<un
   return runDispatch(tool, params, TOOL_HANDLERS, tabId);
 }
 
-async function navigate(params: { url: string }): Promise<{ tabId: number }> {
+async function navigate(params: { url: string }, boundTabId?: number): Promise<{ tabId: number }> {
   const url = params?.url;
   if (typeof url !== 'string' || !isScopedUrl(url)) {
     throw new Error(`navigate: url not in scoped console domains: ${url}`);
@@ -1024,23 +1080,21 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
     throw new Error(`navigate: url blocked by managed policy: ${url}`);
   }
 
-  // REUSE one console tab — do NOT close/recreate. Repeatedly creating fresh
-  // tabs churns the OIDC session (causing "Invalid CSRF token") and forces a
-  // new chrome.debugger attach (the "started debugging" infobar) each time.
-  // Since reads go through CDP (not a content script), a stable single tab is
-  // both correct and far gentler on the auth flow.
+  // REUSE this worker's OWN bound tab — do NOT close/recreate, and never adopt
+  // another console tab (that would let a worker drive a tab it isn't bound to).
+  // Repeatedly creating fresh tabs also churns the OIDC session (causing "Invalid
+  // CSRF token") and forces a new chrome.debugger attach each time. A new tab is
+  // created ONLY when the bound tab is gone. Falls back to the global targetTabId
+  // solely for legacy callers (login's initial navigate) that pass no bound tab.
+  const reuseCandidate = boundTabId ?? targetTabId;
   let reuseId: number | undefined;
-  if (targetTabId !== undefined) {
+  if (reuseCandidate !== undefined) {
     try {
-      const t = await chrome.tabs.get(targetTabId);
+      const t = await chrome.tabs.get(reuseCandidate);
       if (t.id !== undefined) reuseId = t.id;
     } catch {
-      /* prior tab was closed */
+      /* the worker's bound tab was closed — a fresh tab is created below */
     }
-  }
-  if (reuseId === undefined) {
-    const existing = await chrome.tabs.query({ url: SCOPED_QUERY_PATTERNS });
-    if (existing.length > 0 && existing[0].id !== undefined) reuseId = existing[0].id;
   }
 
   let tabId: number;
@@ -1100,7 +1154,7 @@ async function navigate(params: { url: string }): Promise<{ tabId: number }> {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials && !loginInProgress) {
-      await login(lastLoginCredentials);
+      await login(lastLoginCredentials, tabId);
       await neutralizeBeforeunload(tabId);
       try {
         await ensureDebuggerAttached(tabId);
@@ -1186,11 +1240,14 @@ async function waitForSettle(tabId: number, timeoutMs = 15_000): Promise<void> {
  * Credentials are used in-memory only (passed per call from xcsh); they are
  * never persisted by the extension.
  */
-async function login(params: {
-  email: string;
-  password: string;
-  consoleUrl: string;
-}): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
+async function login(
+  params: {
+    email: string;
+    password: string;
+    consoleUrl: string;
+  },
+  boundTabId?: number,
+): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
   // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
   const { email, password, consoleUrl } = params ?? ({} as any);
   if (!email || !password || !consoleUrl) {
@@ -1222,7 +1279,7 @@ async function login(params: {
   loginInProgress = true;
   let tabId: number;
   try {
-    ({ tabId } = await navigate({ url: consoleUrl }));
+    ({ tabId } = await navigate({ url: consoleUrl }, boundTabId));
   } finally {
     loginInProgress = false;
   }
@@ -2710,7 +2767,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   const key = sessionKeyFromUrl(tab?.url);
   const activeKey = key ? sessionKeyStr(key) : null;
   trackTabSessionKey(tabId, activeKey);
-  setActiveTenant(activeKey);
+  setActiveTenant(activeKey, tabId);
   // Hide/show the panel per-tab: only F5 XC tenant tabs get it.
   void applySidePanelGate(tabId, tab?.url);
   // Phase 0a: record activations that WOULD bind a console tab, with the WS
@@ -2748,31 +2805,40 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   void applySidePanelGate(tabId, changeInfo.url);
   const key2 = sessionKeyFromUrl(changeInfo.url);
   const activeKey2 = key2 ? sessionKeyStr(key2) : null;
+  // A tab that already has a worker just changed tenant key (e.g. navigated from
+  // tenant A's console to tenant B's, or away to a non-console URL): release the
+  // stale worker (its context is the old tenant) and, for a new tenant, spawn a
+  // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
+  const prevKey = tabSessionKeys.get(tabId);
+  if (
+    !manualPortPinned &&
+    prevKey !== undefined &&
+    prevKey !== activeKey2 &&
+    portForTab(registry, sidForTab(tabId)) !== undefined
+  ) {
+    nmSend({ type: 'release', sessionId: sidForTab(tabId) });
+    clearPortForTab(tabId);
+    if (activeKey2 !== null && activeKey2 !== '') {
+      nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: activeKey2 });
+    }
+  }
   trackTabSessionKey(tabId, activeKey2);
-  setActiveTenant(activeKey2);
+  setActiveTenant(activeKey2, tabId);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
-  // Capture the closed tab's tenant key BEFORE pruning — onRemoved has no URL.
-  const closedKey = tabSessionKeys.get(tabId);
   tabSessionKeys.delete(tabId);
+  clearPortForTab(tabId); // drop this tab's socket→tab binding
   const a = decideBinding(bindingState(), { kind: 'removed', tabId });
   if (a.action === 'unbind') await setControlledTab(undefined);
   broadcastToChatPanels({ type: 'tab_closed', tabId }); // panel prunes that tab's session
-  // Last tab for this tenant just closed → ask the manager to reap its worker.
-  if (closedKey && !manualPortPinned) {
-    const tabs = await chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]);
-    const remainingKeys = tabs
-      .map((t) => {
-        const k = sessionKeyFromUrl(t.url);
-        return k ? sessionKeyStr(k) : null;
-      })
-      .filter((k): k is string => k !== null);
-    if (hasNoRemainingTenantTab(remainingKeys, closedKey)) {
-      nmSend({ type: 'release', tenantKey: closedKey });
-    }
+  // Per-tab: the closed tab IS the session, so reap its worker directly by sid —
+  // no tenant/last-tab bookkeeping (a sibling tab of the same tenant keeps its
+  // own separate worker). Idempotent: the manager ignores an unknown sid.
+  if (!manualPortPinned) {
+    nmSend({ type: 'release', sessionId: sidForTab(tabId) });
   }
 });

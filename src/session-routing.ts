@@ -5,7 +5,9 @@ export function sidForTab(tabId: number): string {
 }
 
 export interface BridgeLike {
-  sessionId?: string;
+  // `string | null` mirrors the live `BridgeInfo.sessionId` (a worker that sent no
+  // per-tab sid stores null), so the real registry is accepted directly.
+  sessionId?: string | null;
 }
 
 /** The bridge port whose worker advertised `sid` (from hello_ack), or undefined. */
