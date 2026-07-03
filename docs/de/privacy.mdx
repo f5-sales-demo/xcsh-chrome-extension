@@ -1,0 +1,73 @@
+---
+title: Datenschutzrichtlinie
+description: >-
+  Wie die xcsh Chrome-Erweiterung mit Ihren Daten umgeht — worauf sie zugreift,
+  wohin diese Daten gelangen und was sie niemals tut.
+sidebar:
+  order: 99
+  label: Datenschutz
+i18n:
+  sourceHash: 1a9472275583
+  translator: machine
+---
+
+Gültig ab: 3. Juli 2026
+
+Die **xcsh Chrome-Erweiterung** („die Erweiterung") ist eine Manifest-V3-Browsererweiterung, mit der der xcsh KI-Assistent die F5 Distributed Cloud Konsole in Ihrem Namen und in Ihrem eigenen Browser bedienen kann. Diese Richtlinie erläutert, auf welche Daten die Erweiterung zugreift, wie diese Daten verwendet werden und was die Erweiterung niemals tut.
+
+## Zusammenfassung
+
+- Die Erweiterung läuft **ausschließlich** auf Seiten der F5 Distributed Cloud Konsole (`*.volterra.us`, `*.console.ves.volterra.io`).
+- Sie liest Seiteninhalte dieser Seiten, damit der Assistent verstehen und auf das reagieren kann, was auf dem Bildschirm angezeigt wird.
+- Diese Inhalte und Ihre Chat-Nachrichten werden **ausschließlich** an die xcsh-Begleitanwendung gesendet, die lokal auf Ihrem eigenen Computer läuft.
+- Die Erweiterung **sendet** Ihre Daten **nicht** an den Entwickler und verwendet **keine** Analyse-, Tracking- oder Werbefunktionen.
+
+## Worauf die Erweiterung zugreift
+
+Während Sie sich auf einer Seite der F5 Distributed Cloud Konsole befinden — und nur dort — kann die Erweiterung Folgendes lesen:
+
+- **Seiteninhalt** — die Struktur und den Text der Seite (den Barrierefreiheitsbaum und das DOM), die aktuelle URL sowie die Werte von Formularfeldern, damit der Assistent Steuerelemente der Konsole finden und bedienen kann.
+- **Ihre Chat-Eingaben** — die Nachrichten, die Sie in den Seitenleisten-Chat der Erweiterung eingeben.
+- **Diagnosesignale** — Konsolen-Log-Meldungen und Metadaten von Netzwerkanfragen der Konsolenseite, die zur Fehlerbehebung bei der Automatisierung verwendet werden.
+
+Die Erweiterung liest keine Seiten auf anderen Websites.
+
+## Wie Ihre Daten verwendet werden
+
+Der Seiteninhalt und Ihre Chat-Nachrichten werden an die **xcsh-Begleitanwendung** gesendet — ein Kommandozeilenprogramm, das Sie auf Ihrem eigenen Computer installieren und ausführen — und zwar über einen lokalen Kanal (Native Messaging und eine localhost-Verbindung). Die Begleitanwendung führt den KI-Assistenten aus, der entscheidet, welche Aktionen durchgeführt werden, und sendet Anweisungen an die Erweiterung zurück, damit diese sie im Konsolen-Tab ausführt.
+
+Zur Erzeugung von Antworten sendet die Begleitanwendung Ihre Anfrage und den relevanten Seitenkontext an den KI-Modellanbieter, **den Sie konfigurieren** (zum Beispiel die Anthropic API oder das interne Modell-Gateway Ihrer Organisation), unter Verwendung **Ihrer eigenen** Anmeldedaten. Diese Verarbeitung unterliegt den Bedingungen und der Datenschutzrichtlinie des jeweiligen Anbieters. Die Erweiterung selbst wählt niemals einen Modellanbieter aus oder kontaktiert ihn.
+
+## Was die Erweiterung nicht tut
+
+- Sie sendet Ihre Daten **nicht** an den Entwickler der Erweiterung oder an einen vom Entwickler betriebenen Server.
+- Sie verwendet **keine** Analyse-, Telemetrie-, Tracking-, Cookie-, Fingerprinting- oder Werbefunktionen.
+- Sie verkauft oder teilt Ihre Daten **nicht** mit Dritten.
+- Sie erhebt **keine** Daten für einen Zweck, der nichts mit ihrem einzigen Zweck zu tun hat: der Automatisierung der F5 Distributed Cloud Konsole auf Ihre Anforderung hin.
+
+## Lokaler Speicher
+
+Die Erweiterung speichert Folgendes lokal in Ihrem Browser, unter Verwendung des Erweiterungsspeichers von Chrome:
+
+- Ihre Erweiterungseinstellungen.
+- Ihren Chat- und Sitzungsverlauf, der dem jeweiligen Konsolen-Tab zugeordnet ist.
+
+Diese Daten verbleiben auf Ihrem Gerät. Sie können sie jederzeit entfernen, indem Sie die Daten der Erweiterung löschen oder die Erweiterung deinstallieren, wodurch die gespeicherten Daten gelöscht werden.
+
+## Datenaufbewahrung
+
+Die Erweiterung bewahrt nur die oben beschriebenen lokalen Einstellungen und den Verlauf auf, und zwar nur so lange, bis Sie diese löschen oder die Erweiterung deinstallieren. Der Entwickler bewahrt nichts auf, da der Entwickler nichts erhält.
+
+## Berechtigungen
+
+Die Erweiterung fordert nur die Berechtigungen an, die erforderlich sind, um die F5 Distributed Cloud Konsole in Ihrem Namen zu bedienen: Zugriff auf die F5-Konsolendomänen, die Möglichkeit, den Konsolen-Tab zu lesen und zu steuern, lokalen Speicher für Einstellungen und Verlauf sowie Native Messaging, um die lokale Begleitanwendung zu erreichen. Die Begründung für jede Berechtigung ist im Chrome Web Store-Eintrag der Erweiterung aufgeführt.
+
+## Änderungen an dieser Richtlinie
+
+Sollte sich diese Richtlinie ändern, wird die aktualisierte Version mit einem neuen Gültigkeitsdatum auf dieser Seite veröffentlicht.
+
+## Kontakt
+
+Fragen zu dieser Richtlinie können als Issue im Quellcode-Repository der Erweiterung gestellt werden: https://github.com/f5-sales-demo/xcsh-chrome-extension.
+
+Diese Richtlinie wird auch in anderen Sprachen veröffentlicht. Bei etwaigen Abweichungen zwischen den Übersetzungen hat die englische Version Vorrang.

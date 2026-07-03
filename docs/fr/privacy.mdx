@@ -1,0 +1,73 @@
+---
+title: Politique de confidentialité
+description: >-
+  Comment l'extension Chrome xcsh gère vos données — ce à quoi elle accède, où
+  ces données vont, et ce qu'elle ne fait jamais.
+sidebar:
+  order: 99
+  label: Confidentialité
+i18n:
+  sourceHash: 1a9472275583
+  translator: machine
+---
+
+Date d'entrée en vigueur : 3 juillet 2026
+
+L'**Extension Chrome xcsh** (« l'extension ») est une extension de navigateur Manifest V3 qui permet à l'assistant IA xcsh d'utiliser la console F5 Distributed Cloud en votre nom, dans votre propre navigateur. Cette politique explique à quelles données l'extension accède, comment ces données sont utilisées et ce que l'extension ne fait jamais.
+
+## Résumé
+
+- L'extension s'exécute **uniquement** sur les pages de la console F5 Distributed Cloud (`*.volterra.us`, `*.console.ves.volterra.io`).
+- Elle lit le contenu de ces pages afin que l'assistant puisse comprendre et agir sur ce qui est à l'écran.
+- Ce contenu et vos messages de chat sont envoyés **uniquement** à l'application compagnon xcsh qui s'exécute localement sur votre propre ordinateur.
+- L'extension **n'envoie pas** vos données au développeur, et n'utilise **aucun** outil d'analyse, de suivi ou de publicité.
+
+## Ce à quoi l'extension accède
+
+Pendant que vous êtes sur une page de la console F5 Distributed Cloud, et uniquement à cet endroit, l'extension peut lire :
+
+- **Le contenu de la page** — la structure et le texte de la page (l'arbre d'accessibilité et le DOM), l'URL actuelle et les valeurs des champs de formulaire, afin que l'assistant puisse localiser et utiliser les commandes de la console.
+- **Vos saisies de chat** — les messages que vous tapez dans le chat du panneau latéral de l'extension.
+- **Les signaux de diagnostic** — les messages du journal de la console et les métadonnées des requêtes réseau de la page de la console, utilisés pour dépanner l'automatisation.
+
+L'extension ne lit les pages d'aucun autre site web.
+
+## Comment vos données sont utilisées
+
+Le contenu de la page et vos messages de chat sont envoyés à l'**application compagnon xcsh** — un programme en ligne de commande que vous installez et exécutez sur votre propre ordinateur — via un canal local (messagerie native et une connexion localhost). L'application compagnon exécute l'assistant IA qui décide des actions à entreprendre et renvoie des instructions à l'extension pour les exécuter dans l'onglet de la console.
+
+Pour générer des réponses, l'application compagnon envoie votre requête et le contexte pertinent de la page au fournisseur de modèle d'IA **que vous configurez** (par exemple, l'API Anthropic ou la passerelle de modèle interne de votre organisation), en utilisant **vos propres** identifiants. Ce traitement est régi par les conditions et la politique de confidentialité de ce fournisseur. L'extension elle-même ne sélectionne ni ne contacte jamais un fournisseur de modèle.
+
+## Ce que l'extension ne fait pas
+
+- Elle **n'envoie pas** vos données au développeur de l'extension ni à aucun serveur exploité par le développeur.
+- Elle **n'utilise pas** d'outils d'analyse, de télémétrie, de suivi, de cookies, d'empreinte numérique ou de publicité.
+- Elle **ne vend ni ne partage pas** vos données avec des tiers.
+- Elle **ne collecte pas** de données à des fins étrangères à son unique objectif : automatiser la console F5 Distributed Cloud à votre demande.
+
+## Stockage local
+
+L'extension stocke localement les éléments suivants dans votre navigateur, en utilisant le stockage d'extension de Chrome :
+
+- Vos paramètres d'extension.
+- Votre historique de chat et de session, associé à l'onglet de la console auquel il appartient.
+
+Ces données restent sur votre appareil. Vous pouvez les supprimer à tout moment en effaçant les données de l'extension ou en désinstallant l'extension, ce qui supprime ses données stockées.
+
+## Conservation des données
+
+L'extension ne conserve que les paramètres et l'historique locaux décrits ci-dessus, et uniquement jusqu'à ce que vous les effaciez ou désinstalliez l'extension. Le développeur ne conserve rien, car il ne reçoit rien.
+
+## Autorisations
+
+L'extension ne demande que les autorisations nécessaires pour utiliser la console F5 Distributed Cloud en votre nom : l'accès aux domaines de la console F5, la capacité de lire et de piloter l'onglet de la console, le stockage local des paramètres et de l'historique, et la messagerie native pour atteindre l'application compagnon locale. La justification de chaque autorisation est indiquée sur la fiche de l'extension dans le Chrome Web Store.
+
+## Modifications de cette politique
+
+Si cette politique change, la version mise à jour sera publiée sur cette page avec une nouvelle date d'entrée en vigueur.
+
+## Contact
+
+Les questions concernant cette politique peuvent être posées sous forme de ticket sur le dépôt source de l'extension : https://github.com/f5-sales-demo/xcsh-chrome-extension.
+
+Cette politique est également publiée dans d'autres langues. En cas de divergence entre les traductions, la version anglaise prévaut.

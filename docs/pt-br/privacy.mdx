@@ -1,0 +1,73 @@
+---
+title: Política de Privacidade
+description: >-
+  Como a Extensão do Chrome xcsh trata seus dados — o que ela acessa, para onde
+  esses dados vão e o que ela nunca faz.
+sidebar:
+  order: 99
+  label: Privacidade
+i18n:
+  sourceHash: 1a9472275583
+  translator: machine
+---
+
+Data de vigência: 3 de julho de 2026
+
+A **Extensão do Chrome xcsh** ("a extensão") é uma extensão de navegador Manifest V3 que permite ao assistente de IA xcsh operar o console do F5 Distributed Cloud em seu nome, em seu próprio navegador. Esta política explica quais dados a extensão acessa, como esses dados são usados e o que a extensão nunca faz.
+
+## Resumo
+
+- A extensão é executada **apenas** em páginas do console do F5 Distributed Cloud (`*.volterra.us`, `*.console.ves.volterra.io`).
+- Ela lê o conteúdo dessas páginas para que o assistente possa entender e agir sobre o que está na tela.
+- Esse conteúdo e suas mensagens de chat são enviados **apenas** ao aplicativo complementar xcsh em execução localmente no seu próprio computador.
+- A extensão **não** envia seus dados ao desenvolvedor e **não** usa análise, rastreamento ou publicidade.
+
+## O que a extensão acessa
+
+Enquanto você está em uma página do console do F5 Distributed Cloud, e somente aí, a extensão pode ler:
+
+- **Conteúdo da página** — a estrutura e o texto da página (a árvore de acessibilidade e o DOM), a URL atual e os valores dos campos de formulário, para que o assistente possa localizar e operar os controles do console.
+- **Sua entrada de chat** — as mensagens que você digita no chat do painel lateral da extensão.
+- **Sinais de diagnóstico** — mensagens de log do console e metadados de requisições de rede da página do console, usados para solucionar problemas de automação.
+
+A extensão não lê páginas de nenhum outro site.
+
+## Como seus dados são usados
+
+O conteúdo da página e suas mensagens de chat são enviados ao **aplicativo complementar xcsh** — um programa de linha de comando que você instala e executa em seu próprio computador — por meio de um canal local (mensagens nativas e uma conexão localhost). O aplicativo complementar executa o assistente de IA que decide quais ações tomar e envia instruções de volta à extensão para executá-las na aba do console.
+
+Para gerar respostas, o aplicativo complementar envia sua solicitação e o contexto relevante da página ao provedor de modelo de IA que **você configura** (por exemplo, a API da Anthropic ou o gateway de modelo interno da sua organização), usando **suas próprias** credenciais. Esse processamento é regido pelos termos e pela política de privacidade desse provedor. A extensão em si nunca seleciona nem contata um provedor de modelo.
+
+## O que a extensão não faz
+
+- Ela **não** envia seus dados ao desenvolvedor da extensão nem a qualquer servidor operado pelo desenvolvedor.
+- Ela **não** usa análise, telemetria, rastreamento, cookies, fingerprinting ou publicidade.
+- Ela **não** vende nem compartilha seus dados com terceiros.
+- Ela **não** coleta dados para qualquer finalidade não relacionada à sua única finalidade: automatizar o console do F5 Distributed Cloud a seu pedido.
+
+## Armazenamento local
+
+A extensão armazena o seguinte localmente no seu navegador, usando o armazenamento de extensões do Chrome:
+
+- Suas configurações da extensão.
+- Seu histórico de chat e sessão, associado à aba do console à qual pertence.
+
+Esses dados permanecem no seu dispositivo. Você pode removê-los a qualquer momento limpando os dados da extensão ou desinstalando a extensão, o que exclui os dados armazenados.
+
+## Retenção de dados
+
+A extensão retém apenas as configurações locais e o histórico descritos acima, e somente até você limpá-los ou desinstalar a extensão. O desenvolvedor não retém nada, porque o desenvolvedor não recebe nada.
+
+## Permissões
+
+A extensão solicita apenas as permissões necessárias para operar o console do F5 Distributed Cloud em seu nome: acesso aos domínios do console F5, a capacidade de ler e controlar a aba do console, armazenamento local para configurações e histórico, e mensagens nativas para alcançar o aplicativo complementar local. A justificativa de cada permissão está listada na página da extensão na Chrome Web Store.
+
+## Alterações nesta política
+
+Se esta política for alterada, a versão atualizada será publicada nesta página com uma nova data de vigência.
+
+## Contato
+
+Dúvidas sobre esta política podem ser registradas como uma issue no repositório de código-fonte da extensão: https://github.com/f5-sales-demo/xcsh-chrome-extension.
+
+Esta política também é publicada em outros idiomas. Se houver qualquer discrepância entre as traduções, a versão em inglês prevalece.

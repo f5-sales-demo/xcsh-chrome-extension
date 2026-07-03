@@ -1,0 +1,73 @@
+---
+title: Política de privacidad
+description: >-
+  Cómo la extensión de Chrome xcsh gestiona tus datos: a qué accede, adónde van
+  esos datos y lo que nunca hace.
+sidebar:
+  order: 99
+  label: Privacidad
+i18n:
+  sourceHash: 1a9472275583
+  translator: machine
+---
+
+Fecha de entrada en vigor: 3 de julio de 2026
+
+La **extensión de Chrome xcsh** («la extensión») es una extensión de navegador Manifest V3 que permite al asistente de IA de xcsh operar la consola de F5 Distributed Cloud en tu nombre, en tu propio navegador. Esta política explica a qué datos accede la extensión, cómo se usan esos datos y lo que la extensión nunca hace.
+
+## Resumen
+
+- La extensión se ejecuta **únicamente** en las páginas de la consola de F5 Distributed Cloud (`*.volterra.us`, `*.console.ves.volterra.io`).
+- Lee el contenido de esas páginas para que el asistente pueda entender y actuar sobre lo que aparece en pantalla.
+- Ese contenido y tus mensajes de chat se envían **únicamente** a la aplicación complementaria de xcsh que se ejecuta localmente en tu propio equipo.
+- La extensión **no** envía tus datos al desarrollador y **no** utiliza análisis, seguimiento ni publicidad.
+
+## A qué accede la extensión
+
+Mientras estás en una página de la consola de F5 Distributed Cloud, y solo ahí, la extensión puede leer:
+
+- **Contenido de la página**: la estructura y el texto de la página (el árbol de accesibilidad y el DOM), la URL actual y los valores de los campos de formulario, para que el asistente pueda localizar y operar los controles de la consola.
+- **Tu entrada de chat**: los mensajes que escribes en el chat del panel lateral de la extensión.
+- **Señales de diagnóstico**: los mensajes del registro de la consola y los metadatos de las solicitudes de red de la página de la consola, usados para solucionar problemas de la automatización.
+
+La extensión no lee páginas de ningún otro sitio web.
+
+## Cómo se usan tus datos
+
+El contenido de la página y tus mensajes de chat se envían a la **aplicación complementaria de xcsh**, un programa de línea de comandos que instalas y ejecutas en tu propio equipo, a través de un canal local (mensajería nativa y una conexión de localhost). La aplicación complementaria ejecuta el asistente de IA que decide qué acciones tomar y envía instrucciones de vuelta a la extensión para llevarlas a cabo en la pestaña de la consola.
+
+Para generar respuestas, la aplicación complementaria envía tu solicitud y el contexto relevante de la página al proveedor de modelos de IA que **tú configuras** (por ejemplo, la API de Anthropic o la pasarela de modelos interna de tu organización), usando **tus propias** credenciales. Ese procesamiento se rige por los términos y la política de privacidad de ese proveedor. La extensión en sí nunca selecciona ni contacta a un proveedor de modelos.
+
+## Lo que la extensión no hace
+
+- **No** envía tus datos al desarrollador de la extensión ni a ningún servidor operado por el desarrollador.
+- **No** utiliza análisis, telemetría, seguimiento, cookies, huellas digitales ni publicidad.
+- **No** vende ni comparte tus datos con terceros.
+- **No** recopila datos para ningún fin ajeno a su propósito único: automatizar la consola de F5 Distributed Cloud a petición tuya.
+
+## Almacenamiento local
+
+La extensión almacena lo siguiente de forma local en tu navegador, usando el almacenamiento de extensiones de Chrome:
+
+- Tus ajustes de la extensión.
+- Tu historial de chat y de sesión, asociado a la pestaña de la consola a la que pertenece.
+
+Estos datos permanecen en tu dispositivo. Puedes eliminarlos en cualquier momento borrando los datos de la extensión o desinstalándola, lo que elimina los datos que tiene almacenados.
+
+## Conservación de datos
+
+La extensión conserva únicamente los ajustes y el historial locales descritos anteriormente, y solo hasta que los borres o desinstales la extensión. El desarrollador no conserva nada, porque el desarrollador no recibe nada.
+
+## Permisos
+
+La extensión solicita únicamente los permisos necesarios para operar la consola de F5 Distributed Cloud en tu nombre: acceso a los dominios de la consola de F5, la capacidad de leer y controlar la pestaña de la consola, almacenamiento local para ajustes e historial, y mensajería nativa para comunicarse con la aplicación complementaria local. La justificación de cada permiso figura en la ficha de la extensión en Chrome Web Store.
+
+## Cambios en esta política
+
+Si esta política cambia, la versión actualizada se publicará en esta página con una nueva fecha de entrada en vigor.
+
+## Contacto
+
+Las preguntas sobre esta política pueden plantearse como una incidencia en el repositorio de código fuente de la extensión: https://github.com/f5-sales-demo/xcsh-chrome-extension.
+
+Esta política también se publica en otros idiomas. Si existe alguna discrepancia entre las traducciones, prevalece la versión en inglés.
