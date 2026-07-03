@@ -4,12 +4,21 @@
  *
  * Wraps `chrome-webstore-upload-cli@3` (which reads the OAuth credentials from
  * the EXTENSION_ID / CLIENT_ID / CLIENT_SECRET / REFRESH_TOKEN env vars). Unlike a
- * blanket `... || echo warning`, this classifies failures:
+ * blanket `... || echo warning`, this classifies failures. Crucially, the
+ * "in review" lock is handled DIFFERENTLY for upload vs publish, because they
+ * mean opposite things for whether the version actually shipped:
  *
  *   - SUCCESS                      → exit 0
- *   - transient "previous version  → ::warning:: + exit 0 (the new version is
- *     still in review"               uploaded/queued and publishes once review
- *     (ITEM_NOT_UPDATABLE)           clears; this must not fail the release)
+ *   - PUBLISH blocked by in-review → ::warning:: + exit 0. The package WAS
+ *     (ITEM_NOT_UPDATABLE on         uploaded as a draft; only the publish
+ *      publish)                      transition is held, and CWS publishes the
+ *                                    draft automatically once review clears.
+ *   - UPLOAD blocked by in-review  → ::error:: + exit 1. The upload was
+ *     (ITEM_NOT_UPDATABLE on         REJECTED, so this version was neither
+ *      upload)                       uploaded nor queued — it did NOT ship. Fail
+ *                                    loudly (never report a phantom "queued"
+ *                                    success); re-run the release after the
+ *                                    in-review submission is approved.
  *   - ANYTHING ELSE (bad/expired   → ::error:: + exit 1 (fail the release loudly
  *     credentials, network, quota,   so a real break is visible, never silently
  *     wrong EXTENSION_ID, …)         swallowed)
@@ -20,8 +29,9 @@ import { execFileSync } from 'node:child_process';
 
 const ZIP = 'xcsh-chrome-extension.zip';
 const CLI = ['--yes', 'chrome-webstore-upload-cli@3'];
-// Markers that mean "the item is locked because a prior submission is in review"
-// — the one failure we tolerate (the release still ships; CWS publishes later).
+// Markers that mean "the item is locked because a prior submission is in review".
+// Tolerated ONLY on the publish step (the draft is already uploaded and CWS
+// publishes it later); on the upload step it is a hard failure — nothing shipped.
 const TRANSIENT = /ITEM_NOT_UPDATABLE|in[\s_-]?review|currently being reviewed|pending review/i;
 
 const version = process.argv[2] ?? '';
@@ -44,10 +54,13 @@ function run(args) {
   }
 }
 
-function defer(step) {
+// The publish transition was held because a prior submission is still in
+// review. The package IS uploaded as a draft; CWS publishes it automatically
+// once that review clears — so this is genuinely deferred, not dropped.
+function deferPublish() {
   console.log(
-    `::warning::Chrome Web Store ${step} deferred — a previous submission is still in review. ` +
-      `v${version || '(next)'} is uploaded/queued and will publish automatically once review clears.`,
+    `::warning::Chrome Web Store publish deferred — a previous submission is still in review. ` +
+      `v${version || '(next)'} is uploaded as a draft and will publish automatically once the current review clears.`,
   );
   process.exit(0);
 }
@@ -60,13 +73,22 @@ function fail(step, output) {
 
 const uploaded = run(['upload', '--source', ZIP]);
 if (!uploaded.ok) {
-  if (TRANSIENT.test(uploaded.output)) defer('upload'); // exits 0
+  // An upload rejected because the item is locked by an in-review submission
+  // means this version was NEITHER uploaded NOR queued — it did not ship. Fail
+  // loudly; a phantom "queued" success here silently drops the release. Re-run
+  // after the in-review submission is approved (the item unlocks then).
+  if (TRANSIENT.test(uploaded.output)) {
+    fail(
+      'upload — item locked by a submission still in review; this version was NOT uploaded or published, re-run after approval',
+      uploaded.output,
+    ); // exits 1
+  }
   fail('upload', uploaded.output); // exits 1
 }
 
 const published = run(['publish']);
 if (!published.ok) {
-  if (TRANSIENT.test(published.output)) defer('publish'); // exits 0
+  if (TRANSIENT.test(published.output)) deferPublish(); // exits 0 — draft uploaded, auto-publishes later
   fail('publish', published.output); // exits 1
 }
 
