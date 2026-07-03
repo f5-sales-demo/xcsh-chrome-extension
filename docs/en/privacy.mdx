@@ -1,0 +1,68 @@
+---
+title: Privacy Policy
+description: How the xcsh Chrome Extension handles your data — what it accesses, where that data goes, and what it never does.
+sidebar:
+  order: 99
+  label: Privacy
+---
+
+Effective date: 3 July 2026
+
+The **xcsh Chrome Extension** ("the extension") is a Manifest V3 browser extension that lets the xcsh AI assistant operate the F5 Distributed Cloud console on your behalf, in your own browser. This policy explains what data the extension accesses, how that data is used, and what the extension never does.
+
+## Summary
+
+- The extension runs **only** on F5 Distributed Cloud console pages (`*.volterra.us`, `*.console.ves.volterra.io`).
+- It reads page content from those pages so the assistant can understand and act on what is on screen.
+- That content and your chat messages are sent **only** to the xcsh companion application running locally on your own computer.
+- The extension **does not** send your data to the developer, and uses **no** analytics, tracking, or advertising.
+
+## What the extension accesses
+
+While you are on an F5 Distributed Cloud console page, and only there, the extension may read:
+
+- **Page content** — the structure and text of the page (the accessibility tree and DOM), the current URL, and form field values, so the assistant can locate and operate console controls.
+- **Your chat input** — the messages you type into the extension's side-panel chat.
+- **Diagnostic signals** — console log messages and network request metadata from the console page, used to troubleshoot automation.
+
+The extension does not read pages on any other website.
+
+## How your data is used
+
+The page content and your chat messages are sent to the **xcsh companion application** — a command-line program you install and run on your own computer — over a local channel (native messaging and a localhost connection). The companion application runs the AI assistant that decides which actions to take and sends instructions back to the extension to carry them out in the console tab.
+
+To generate responses, the companion application sends your request and the relevant page context to the AI model provider **you configure** (for example, the Anthropic API or your organization's internal model gateway), using **your own** credentials. That processing is governed by that provider's terms and privacy policy. The extension itself never selects or contacts a model provider.
+
+## What the extension does not do
+
+- It does **not** send your data to the extension's developer or to any server operated by the developer.
+- It does **not** use analytics, telemetry, tracking, cookies, fingerprinting, or advertising.
+- It does **not** sell or share your data with third parties.
+- It does **not** collect data for any purpose unrelated to its single purpose: automating the F5 Distributed Cloud console at your request.
+
+## Local storage
+
+The extension stores the following locally in your browser, using Chrome's extension storage:
+
+- Your extension settings.
+- Your chat and session history, associated with the console tab it belongs to.
+
+This data stays on your device. You can remove it at any time by clearing the extension's data or by uninstalling the extension, which deletes its stored data.
+
+## Data retention
+
+The extension retains only the local settings and history described above, and only until you clear them or uninstall the extension. The developer retains nothing, because the developer receives nothing.
+
+## Permissions
+
+The extension requests only the permissions needed to operate the F5 Distributed Cloud console on your behalf: access to the F5 console domains, the ability to read and drive the console tab, local storage for settings and history, and native messaging to reach the local companion application. Each permission's justification is listed on the extension's Chrome Web Store listing.
+
+## Changes to this policy
+
+If this policy changes, the updated version will be published on this page with a new effective date.
+
+## Contact
+
+Questions about this policy can be raised as an issue on the extension's source repository: https://github.com/f5-sales-demo/xcsh-chrome-extension.
+
+This policy is also published in other languages. If there is any discrepancy between translations, the English version prevails.
