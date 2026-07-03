@@ -19,7 +19,7 @@ await Bun.build({
 });
 
 await Bun.build({
-  entrypoints: ['src/agent-visual-indicator.ts'],
+  entrypoints: ['src/agent-visual-indicator.tsx'],
   outdir: 'dist',
   target: 'browser',
   minify: false,
