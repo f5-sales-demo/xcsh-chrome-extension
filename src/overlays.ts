@@ -14,6 +14,8 @@
  * DOM mounting, animation, and cleanup are all shared.
  */
 
+import { mountOverlay } from './overlay/mount';
+
 const RED = '#ca260a'; // F5 / xcsh red
 const RING_BLUE = '#2f80ed'; // click ripple
 const HIGHLIGHT_PAD = 4; // px of breathing room the highlight leaves around the target
@@ -166,31 +168,12 @@ export function planOverlay(spec: OverlaySpec): OverlayPlan | null {
 }
 
 /**
- * Mount an overlay and animate it. Each call creates a fresh, isolated host that
- * removes itself when the animation finishes (with a `ttlMs` safety net so a
- * cancelled/absent animation can never leak a node).
+ * Mount an overlay and animate it. Thin, stable public entry: it keeps this
+ * name/signature (callers + `overlays.test.ts` depend on it) and delegates to the
+ * Preact/Shadow-DOM adapter in `overlay/mount.ts`, which reuses `planOverlay`
+ * geometry, renders into a self-removing token-injected shadow host, and
+ * preserves the original auto-remove timing.
  */
 export function showOverlay(spec: OverlaySpec): void {
-  const plan = planOverlay(spec);
-  if (!plan) return;
-
-  const host = document.createElement('div');
-  host.style.cssText = `position:fixed;left:${plan.left}px;top:${plan.top}px;z-index:2147483647;pointer-events:none;`;
-  const root = host.attachShadow({ mode: 'open' });
-  root.innerHTML = plan.html;
-  document.documentElement.appendChild(host);
-
-  let last: Animation | undefined;
-  for (const a of plan.anims) {
-    const el = root.querySelector(a.sel);
-    if (!el || typeof el.animate !== 'function') continue;
-    last = el.animate(a.keyframes as Keyframe[], a.timing);
-  }
-  if (last) {
-    last.onfinish = () => host.remove();
-    last.oncancel = () => host.remove();
-  }
-  // Safety net: always clean up by ttl, even if animations are unavailable or a
-  // non-final animation outlived `last`. remove() is idempotent.
-  setTimeout(() => host.remove(), plan.ttlMs);
+  mountOverlay(spec);
 }
