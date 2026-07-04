@@ -8,7 +8,10 @@ export function createBus<E extends { type: string }>() {
     },
     on(type: E['type'], fn: (e: E) => void): () => void {
       let set = handlers.get(type);
-      if (!set) handlers.set(type, (set = new Set()));
+      if (!set) {
+        set = new Set();
+        handlers.set(type, set);
+      }
       set.add(fn);
       return () => set?.delete(fn);
     },

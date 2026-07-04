@@ -86,7 +86,7 @@ function ScannerBar() {
 // emblem never intercepts page clicks between activity bursts.
 function StopBadge() {
   const css =
-    '*{box-sizing:border-box}' +
+    '*{box-sizing:border-box}button{all:unset}' +
     `.eff{display:inline-flex;align-items:center;gap:8px;background:#0a0d11;border:1.5px solid ${RED};border-radius:9px;padding:6px 12px 6px 8px;box-shadow:0 6px 16px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.45),0 0 12px rgba(202,38,10,.4);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}` +
     `.eff:hover{border-color:#e8330f;box-shadow:0 8px 20px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.5),0 0 18px rgba(202,38,10,.6)}` +
     '.eff img{display:block;width:24px;height:24px}' +
@@ -95,10 +95,10 @@ function StopBadge() {
     <>
       <style>{css}</style>
       {/* Clicking the emblem (anywhere) stops the agent. */}
-      <div class="eff" onClick={() => chrome.runtime.sendMessage({ type: 'stop_agent' })}>
+      <button type="button" class="eff" onClick={() => chrome.runtime.sendMessage({ type: 'stop_agent' })}>
         <img alt="F5" src={F5_LOGO_DATA_URI} />
         <span class="w">xcsh</span>
-      </div>
+      </button>
     </>
   );
 }
