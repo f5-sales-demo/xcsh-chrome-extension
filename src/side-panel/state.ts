@@ -1,10 +1,5 @@
 import { type ChatStreamMsg, type ChatTurnState, initChatTurn, reduceChatTurn } from '../chat-protocol';
-import {
-  appendAssistantDelta,
-  type Conversation,
-  finalizeAssistant,
-  markAborted,
-} from '../references-store';
+import { appendAssistantDelta, type Conversation, finalizeAssistant, markAborted } from '../references-store';
 
 export interface PanelState {
   conv: Conversation;
@@ -41,6 +36,7 @@ export type PanelAction =
   | { type: 'begin_turn'; id: string; msgId: string }
   | { type: 'end_turn' }
   | { type: 'abort_turn'; at: number }
+  | { type: 'suspend_turn' }
   | { type: 'stream'; msg: ChatStreamMsg; at?: number };
 
 export function panelReducer(s: PanelState, a: PanelAction): PanelState {
@@ -66,6 +62,13 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
     case 'abort_turn':
       if (!s.active) return s;
       return { ...s, conv: markAborted(s.conv, s.active.msgId, a.at), active: null };
+    case 'suspend_turn':
+      // Tab switched away mid-turn. Stop tracking (so a new tab can begin its own
+      // turn) WITHOUT marking the message aborted — the conversation in storage
+      // keeps whatever content has streamed so far, so returning to that tab shows
+      // the partial result (not blank). The SW's turn continues; its chat events are
+      // dropped by the `active.id !== ev.id` guard since active is now null.
+      return { ...s, active: null };
     case 'stream': {
       if (!s.active || s.active.id !== a.msg.id) return s;
       const turn = reduceChatTurn(s.active.state, a.msg);
