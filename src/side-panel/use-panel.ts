@@ -20,11 +20,11 @@ import {
   appendToolNotice,
   appendUserMessage,
   newConversation,
+  removeTabSession,
   setMode as setConvMode,
+  setTenantConv,
   startAssistant,
   tenantConv,
-  setTenantConv,
-  removeTabSession,
 } from '../references-store';
 import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
 import { sessionKeyFromUrl, sessionKeyStr } from '../tab-binding';
@@ -96,7 +96,15 @@ export function usePanel() {
 
   // Panel-owned activation gating (old gateToActiveTab, lines 364–423).
   async function gateToActiveTab(tabId?: number) {
-    if (stateRef.current.active) return; // a turn owns the panel — never blank mid-run (old:365)
+    // If a turn is running on another tab, save + suspend it rather than locking
+    // the panel (the old `if (active) return` caused cross-tab transcript bleed +
+    // blanking: tab B's commands went to tab A's worker because boundTabId never
+    // updated, and tab B's conversation was empty when you returned). The suspended
+    // turn's stream is safely ignored (the `active.id !== ev.id` guard drops it).
+    if (stateRef.current.active) {
+      await saveConversation(stateRef.current.conv);
+      dispatch({ type: 'suspend_turn' });
+    }
     let tab: chrome.tabs.Tab | undefined;
     if (tabId !== undefined) tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (!tab) tab = (await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []))[0];
@@ -163,13 +171,19 @@ export function usePanel() {
           dispatch({ type: 'abort_turn', at: now() });
         }
         // Transcript cleanup stays unconditional — drop the tab→key mapping (old pruneTabSession, 337–340).
-        loadSessionIndex().then((i) => saveSessionIndex(removeTabSession(i, msg.tabId as number))).catch(() => {});
+        loadSessionIndex()
+          .then((i) => saveSessionIndex(removeTabSession(i, msg.tabId as number)))
+          .catch(() => {});
         return;
       }
       if (msg.type === 'page_context') {
         latestContext.current = msg.snapshot;
         const snap = msg.snapshot as { title?: string; path?: string } | null;
-        dispatch({ type: 'page_context', meta: snap ? { title: snap.title, path: snap.path } : null, snapshot: msg.snapshot });
+        dispatch({
+          type: 'page_context',
+          meta: snap ? { title: snap.title, path: snap.path } : null,
+          snapshot: msg.snapshot,
+        });
         return;
       }
       if (isChatInbound(m as ChatInbound)) onChatEvent(m as ChatInbound);
@@ -274,7 +288,14 @@ export function usePanel() {
     // (resolveChatPort), not a global activePort that could hit another tab's busy
     // session — the SW refuses a chat_request with no tabId (#148/#33).
     bus.post(
-      buildChatRequest(turnId, text, s.attachContext ? latestContext.current : null, s.conv.mode, s.conv.id, boundTabId.current),
+      buildChatRequest(
+        turnId,
+        text,
+        s.attachContext ? latestContext.current : null,
+        s.conv.mode,
+        s.conv.id,
+        boundTabId.current,
+      ),
     );
   }
 
