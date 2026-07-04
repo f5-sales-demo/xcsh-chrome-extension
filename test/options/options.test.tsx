@@ -1,17 +1,18 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { cleanup, render, waitFor } from '@testing-library/preact';
+import { Options } from '../../src/options/App';
 
-// Minimal `chrome` stub installed BEFORE importing options.tsx, because the
-// Options component fires chrome.runtime.sendMessage (status_request +
-// bridges_request) and chrome.storage.local.get on mount. This substitutes for
-// the interactive "load unpacked in Chrome" check (brief Step 5), which needs a
-// human + a running xcsh CLI bridge and cannot run headless. It only proves the
-// status/diagnostics/bridges shell mounts without a wiring/crash-on-mount error.
-// (The component lives in src/options/App; the src/options.tsx entry is kept
-// export-free so its bundle loads as a classic script — not tested here.)
-// Async reads resolve empty: sendMessage invokes its callback with undefined
-// (no lastError) and storage.local.get resolves {}.
-(globalThis as unknown as { chrome: unknown }).chrome = {
+// Minimal `chrome` stub for the mount smoke test. The Options component fires
+// chrome.runtime.sendMessage (status_request + bridges_request) and
+// chrome.storage.local.get at RENDER (not at import), so the stub is installed
+// per-test in beforeEach and the previous global restored in afterEach. This
+// isolation is load-bearing: a sibling test file (side-panel/app) also assigns
+// globalThis.chrome, and Bun evaluates every test module before running any
+// test — a shared module-top-level assignment lets file order clobber the stub
+// (observed as a CI-only failure). Scoping per-test makes the suite
+// order-independent. Async reads resolve empty: sendMessage invokes its callback
+// with undefined (no lastError) and storage.local.get resolves {}.
+const chromeStub = {
   runtime: {
     lastError: undefined,
     sendMessage: (_msg: unknown, cb?: (resp: unknown) => void) => cb?.(undefined),
@@ -20,9 +21,15 @@ import { cleanup, render, waitFor } from '@testing-library/preact';
   storage: { local: { get: () => Promise.resolve({}) } },
 };
 
-const { Options } = await import('../../src/options/App');
-
-afterEach(() => cleanup());
+let prevChrome: unknown;
+beforeEach(() => {
+  prevChrome = (globalThis as { chrome?: unknown }).chrome;
+  (globalThis as { chrome?: unknown }).chrome = chromeStub;
+});
+afterEach(() => {
+  cleanup();
+  (globalThis as { chrome?: unknown }).chrome = prevChrome;
+});
 
 describe('options page shell', () => {
   it('renders status, diagnostics, and bridges sections with a minimal chrome stub', async () => {
