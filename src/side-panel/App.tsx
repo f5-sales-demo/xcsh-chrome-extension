@@ -19,12 +19,7 @@ export function App() {
       />
       <ContextChip label={p.contextLabel} onRefresh={p.refreshContext} onDetach={p.toggleContext} />
       <Transcript conv={s.conv} streaming={s.active !== null} />
-      <StatusBar
-        model={s.conv.mode}
-        contextPct={null}
-        contextLabel={p.contextLabel}
-        connected={s.connected}
-      />
+      <StatusBar model={s.conv.mode} contextPct={null} contextLabel={p.contextLabel} connected={s.connected} />
       <Composer disabled={s.inputBlocked} sending={s.active !== null} onSend={p.sendMessage} onStop={p.stop} />
     </>
   );
