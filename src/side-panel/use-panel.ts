@@ -239,11 +239,11 @@ export function usePanel() {
   // Send (old sendMessage, lines 611–663; turn timeout 653–660).
   function sendMessage(text: string) {
     const s = stateRef.current;
-    if (s.inputBlocked || !text || s.active) return;
-    // Disconnected fast-path (old side-panel.ts:619–627): append the user message
-    // and an instant error notice, persist, and return WITHOUT beginning a turn —
-    // otherwise a disconnected send hangs for the full 30s turn timeout.
-    if (!s.connected) {
+    if (!text || s.active) return;
+    // Append the user message + an instant aborted-assistant notice, persist, and
+    // return WITHOUT beginning a turn — used for the blocked/disconnected fast-paths
+    // so a send never hangs for the full 30s turn timeout.
+    const notify = (notice: string) => {
       let conv = appendUserMessage(s.conv, {
         id: `u-${crypto.randomUUID()}`,
         role: 'user',
@@ -255,15 +255,18 @@ export function usePanel() {
       conv = {
         ...conv,
         messages: conv.messages.map((m, i) =>
-          i === conv.messages.length - 1
-            ? { ...m, text: 'xcsh not connected — start the xcsh CLI, then resend.', aborted: true }
-            : m,
+          i === conv.messages.length - 1 ? { ...m, text: notice, aborted: true } : m,
         ),
       };
       dispatch({ type: 'set_conv', conv });
       saveConversation(conv).catch(() => {});
-      return;
-    }
+    };
+    // No live xcsh worker for the active tenant (the gate blocked input) — surface it
+    // per-send instead of swallowing the send (parity with old side-panel.ts:612–615).
+    if (s.inputBlocked)
+      return notify('No xcsh running for this tenant — start the xcsh CLI in that context, then resend.');
+    // Disconnected fast-path (old side-panel.ts:619–627) — avoid the 30s hang.
+    if (!s.connected) return notify('xcsh not connected — start the xcsh CLI, then resend.');
     const userMsgId = `u-${crypto.randomUUID()}`;
     let conv = appendUserMessage(s.conv, {
       id: userMsgId,
