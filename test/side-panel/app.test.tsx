@@ -38,8 +38,13 @@ afterEach(() => {
 
 describe('side-panel App shell', () => {
   it('mounts the shell (header mark + composer input) with a minimal chrome stub', () => {
-    const { container, getByPlaceholderText } = render(<App />);
+    const { container } = render(<App />);
+    // Scope every assertion to this render's own container, NOT the default
+    // body-bound getBy* queries: happy-dom shares one document across the suite,
+    // so a leaked composer from another test would make a body-scoped
+    // getByPlaceholderText match multiple and throw.
     expect(container.querySelector('header .mark')?.textContent).toBe('xcsh');
-    expect(getByPlaceholderText(/ask xcsh/i)).toBeTruthy();
+    const input = container.querySelector<HTMLTextAreaElement>('textarea#input');
+    expect(input?.placeholder).toMatch(/ask xcsh/i);
   });
 });
