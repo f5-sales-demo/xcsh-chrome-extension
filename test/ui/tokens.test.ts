@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { COLORS, GLYPHS, cssVars, injectTokens } from '../../src/ui/theme/tokens';
+import { COLORS, cssVars, GLYPHS, injectTokens } from '../../src/ui/theme/tokens';
 
 describe('theme tokens', () => {
   it('carries the xcsh F5 palette', () => {
