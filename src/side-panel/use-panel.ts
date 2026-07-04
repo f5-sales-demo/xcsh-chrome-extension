@@ -270,7 +270,12 @@ export function usePanel() {
         saveConversation(stateRef.current.conv).catch(() => {});
       }
     }, TURN_TIMEOUT_MS);
-    bus.post(buildChatRequest(turnId, text, s.attachContext ? latestContext.current : null, s.conv.mode, s.conv.id));
+    // Stamp the panel's bound tab so the SW routes this turn to THIS tab's worker
+    // (resolveChatPort), not a global activePort that could hit another tab's busy
+    // session — the SW refuses a chat_request with no tabId (#148/#33).
+    bus.post(
+      buildChatRequest(turnId, text, s.attachContext ? latestContext.current : null, s.conv.mode, s.conv.id, boundTabId.current),
+    );
   }
 
   // Stop (old stopBtn handler, lines 720–727) — posts buildChatStop.
