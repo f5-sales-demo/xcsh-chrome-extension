@@ -127,6 +127,9 @@ export function usePanel() {
       dispatch({ type: 'set_active_tenant', label: `${key.tenant}·${key.env}` });
       // Swap when the tenant OR the tab changed (old:407).
       if (keyStr !== boundSessionKey.current || tab?.id !== prev) await switchToTenantSession(keyStr, tab?.id);
+      // Refresh context for the NEWLY-focused tab so the snapshot attached to the
+      // next turn is this tab's, not the previously-controlled tab's (RC-2, #166).
+      bus.post({ type: 'get_page_context', tabId: tab?.id });
     } else {
       // Active tab is NOT a tenant — enforce inactive every time (old:410–421).
       boundTabId.current = undefined;
@@ -198,7 +201,7 @@ export function usePanel() {
 
     // Boot (old:741–745).
     bus.post({ type: 'status_request' });
-    bus.post({ type: 'get_page_context' });
+    bus.post({ type: 'get_page_context', tabId: boundTabId.current });
     void gateToActiveTab();
 
     return () => {
@@ -323,7 +326,7 @@ export function usePanel() {
   }
 
   function refreshContext() {
-    bus.post({ type: 'get_page_context' }); // old ctx-refresh handler, 711–713
+    bus.post({ type: 'get_page_context', tabId: boundTabId.current }); // old ctx-refresh handler, 711–713
   }
   function toggleContext() {
     dispatch({ type: 'toggle_context' }); // old ctx-detach handler, 715–718

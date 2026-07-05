@@ -20,7 +20,14 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { portForTab, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from './session-routing';
+import {
+  contextTabFor,
+  portForTab,
+  resolveChatPort,
+  resolveToolTab,
+  sidForTab,
+  staleTabPorts,
+} from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -896,17 +903,27 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'chat_stop') {
-      sendTo(turnToBridgePort.get(m.id) ?? activePort, { type: 'chat_stop', id: m.id });
+      // Stop only the socket this turn was pinned to. No activePort fallback — a
+      // stop for an unknown/finished turn must target nothing, never the
+      // last-focused worker (which could abort a different tab's turn). (#166)
+      sendTo(turnToBridgePort.get(m.id), { type: 'chat_stop', id: m.id });
       return;
     }
     if (m.type === 'get_page_context') {
-      buildPageContext(targetTabId)
+      // Build context for the PANEL'S tab (m.tabId), not the global controlled
+      // tab — otherwise a turn's attached context comes from the automation tab
+      // when it differs from the focused tab. targetTabId is only a fallback for
+      // a caller that sent no tabId. (RC-2, #166)
+      const ctxTab = contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId);
+      buildPageContext(ctxTab)
         .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
         .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
       return;
     }
     if (m.type === 'chat_annotate') {
-      chatAnnotate(m, targetTabId).catch(() => {});
+      // Annotate the PANEL'S tab when supplied (parity with get_page_context);
+      // targetTabId only as a fallback. (RC-2, #166)
+      chatAnnotate(m, contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId)).catch(() => {});
       return;
     }
     if (m.type === 'status_request') {

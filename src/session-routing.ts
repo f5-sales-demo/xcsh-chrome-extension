@@ -27,6 +27,17 @@ export function resolveToolTab(sourcePort: number | undefined, portToTab: Map<nu
   return portToTab.get(sourcePort) ?? null;
 }
 
+/** The tab a chat turn's page-context snapshot must be built for: the panel's
+ *  own (requested) tab when it supplied one, else the controlled/automation tab
+ *  as a legacy fallback. Prevents attaching the controlled tab's context to a
+ *  turn whose transcript belongs to a different, focused tab (RC-2, #166). */
+export function contextTabFor(
+  requestedTabId: number | undefined,
+  controlledTabId: number | undefined,
+): number | undefined {
+  return typeof requestedTabId === 'number' ? requestedTabId : controlledTabId;
+}
+
 /** Ports whose worker is still bound to `tabId`'s sid but advertises a tenant|env
  *  that no longer matches the tab's CURRENT `currentKey` — i.e. stale after a
  *  same-tab re-login. The SW evicts these from the registry (and releases +

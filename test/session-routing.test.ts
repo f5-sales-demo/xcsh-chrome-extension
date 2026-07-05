@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { portForTab, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from '../src/session-routing';
+import {
+  contextTabFor,
+  portForTab,
+  resolveChatPort,
+  resolveToolTab,
+  sidForTab,
+  staleTabPorts,
+} from '../src/session-routing';
 
 describe('sidForTab', () => {
   test('derives a stable sid from tabId', () => {
@@ -130,5 +137,22 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
       [19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }],
     ]);
     expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([19222]);
+  });
+});
+
+// RC-2 (issue #166): the page-context snapshot attached to a chat turn must be
+// built for the PANEL'S active tab (the transcript's tab), not the global
+// controlled/automation tab — otherwise the context comes from the wrong tab
+// when the two differ. The panel sends its bound tab; the controlled tab is only
+// a legacy fallback when the panel supplied none.
+describe('contextTabFor (RC-2)', () => {
+  test("prefers the panel's requested tab over the controlled tab", () => {
+    expect(contextTabFor(5, 9)).toBe(5);
+  });
+  test('falls back to the controlled tab only when the panel sent none', () => {
+    expect(contextTabFor(undefined, 9)).toBe(9);
+  });
+  test('undefined when neither is available', () => {
+    expect(contextTabFor(undefined, undefined)).toBeUndefined();
   });
 });
