@@ -20,14 +20,8 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, gateBlockEvidence, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import {
-  contextTabFor,
-  portForTab,
-  resolveChatPort,
-  resolveToolTab,
-  sidForTab,
-  staleTabPorts,
-} from './session-routing';
+import { contextTabFor, portForTab, sidForTab } from './session-routing';
+import { planChatRequest, planHelloAck, planReTenant, planToolRequest } from './sw-router';
 import {
   type BindingState,
   decideBinding,
@@ -661,12 +655,10 @@ function onMessage(msg: any, sourcePort: number): void {
 
   // Identity handshake reply — record which tenant this bridge (port) serves.
   if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
-    if (typeof msg.sessionId !== 'string') return; // not a real xcsh hello_ack
-    if (
-      typeof msg.contractVersion === 'string' &&
-      msg.contractVersion.split('.')[0] !== CONTRACT_VERSION.split('.')[0]
-    ) {
-      // Major mismatch — close and forget this socket rather than trust it.
+    const plan = planHelloAck(msg, CONTRACT_VERSION);
+    if (plan.kind === 'ignore') return; // not a real xcsh hello_ack (no string sessionId)
+    if (plan.kind === 'reject') {
+      // Major contract mismatch — close and forget this socket rather than trust it.
       try {
         sockets.get(sourcePort)?.close();
       } catch {}
@@ -677,10 +669,10 @@ function onMessage(msg: any, sourcePort: number): void {
     }
     const info: BridgeInfo = {
       port: sourcePort,
-      tenant: (msg.tenant as string | null) ?? null,
-      env: (msg.env as string | null) ?? null,
-      sessionId: (msg.sessionId as string | null) ?? null,
-      contextBound: msg.contextBound === true, // additive optional field; anything non-true → false
+      tenant: plan.tenant,
+      env: plan.env,
+      sessionId: plan.sessionId,
+      contextBound: plan.contextBound,
       lastSeen: Date.now(),
     };
     registry.set(sourcePort, info);
@@ -707,16 +699,16 @@ function onMessage(msg: any, sourcePort: number): void {
 
   if (msg.type === 'tool_request') {
     const { id, tool, params } = msg;
-    // THE fix: dispatch to the tab BOUND to this worker's socket — never the
-    // global targetTabId. An unbound source (no live hello_ack correlation) is
-    // refused, so a worker can only ever drive its own tab.
-    const boundTab = resolveToolTab(sourcePort, portToTab);
-    if (boundTab === null) {
+    // Dispatch to the tab BOUND to this worker's socket — never the global
+    // targetTabId. An unbound source (no live hello_ack correlation) is refused,
+    // so a worker can only ever drive its own tab.
+    const plan = planToolRequest(sourcePort, portToTab);
+    if (plan.kind === 'refuse') {
       sendTo(sourcePort, { type: 'tool_result', id, content: 'no bound tab for this session', is_error: true });
       return;
     }
     Promise.resolve()
-      .then(() => runTool(tool, params, boundTab))
+      .then(() => runTool(tool, params, plan.tabId))
       .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
       .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     return;
@@ -873,33 +865,25 @@ chrome.runtime.onConnect.addListener((port) => {
       // Route to the worker for the PANEL'S OWN tab (m.tabId), never a global
       // activePort — otherwise a turn from one tab lands on another tab's worker
       // and can hit its busy session ("session busy"). Refuse if that tab has no
-      // worker, exactly like the tool path. See resolveChatPort / #33.
+      // worker, exactly like the tool path. See planChatRequest / #33.
       //
       // Security: m.tabId comes from the side panel, NOT port.sender.tab — a side
       // panel is an extension page with no sender.tab, so no runtime-verified tab
       // exists to use instead. This is safe because the 'xcsh-chat' port is
       // reachable only by first-party extension contexts (no externally_connectable;
       // content scripts never open it), so the sender is our own trusted panel; and
-      // resolveChatPort refuses any tabId lacking a live bound worker, so a stray id
+      // planChatRequest refuses any tabId lacking a live bound worker, so a stray id
       // routes nowhere. m.sessionKey is the tab's CURRENT "tenant|env": when present
       // the worker must advertise that exact key, so a turn after a same-tab re-login
       // can never resolve the OLD-tenant worker still lingering on this tab's sid (#166).
-      const target = resolveChatPort(
-        typeof m.tabId === 'number' ? m.tabId : undefined,
-        registry,
-        typeof m.sessionKey === 'string' ? m.sessionKey : undefined,
-      );
-      if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
-        port.postMessage({
-          type: 'chat_error',
-          id: m.id,
-          error: 'No xcsh running for this tab — open the F5 console tab and ensure xcsh is running',
-        });
+      const plan = planChatRequest(m, registry, (p) => sockets.get(p)?.readyState === WebSocket.OPEN);
+      if (plan.kind === 'error') {
+        port.postMessage({ type: 'chat_error', id: plan.id, error: plan.error });
         return;
       }
-      turnToPort.set(m.id, port);
-      turnToBridgePort.set(m.id, target); // pin this turn to its origin socket
-      sendTo(target, m);
+      turnToPort.set(plan.id, port);
+      turnToBridgePort.set(plan.id, plan.port); // pin this turn to its origin socket
+      sendTo(plan.port, m);
       return;
     }
     if (m.type === 'chat_stop') {
@@ -2899,14 +2883,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // skipped this whole block and stranded the tab on the old tenant (#166). We
   // also EVICT the stale entry immediately so a chat turn in the race window
   // before the old socket closes can never resolve the old-tenant worker.
-  const stalePorts = manualPortPinned ? [] : staleTabPorts(registry, tabId, activeKey2);
-  if (stalePorts.length > 0) {
-    nmSend({ type: 'release', sessionId: sidForTab(tabId) });
-    for (const p of stalePorts) registry.delete(p); // manager reaps via release; onclose is idempotent
+  const reTenant = manualPortPinned ? { kind: 'noop' as const } : planReTenant(registry, tabId, activeKey2);
+  if (reTenant.kind === 'retenant') {
+    nmSend({ type: 'release', sessionId: reTenant.releaseSid });
+    for (const p of reTenant.evictPorts) registry.delete(p); // manager reaps via release; onclose is idempotent
     clearPortForTab(tabId);
     broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
-    if (activeKey2 !== null && activeKey2 !== '') {
-      nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: activeKey2 });
+    if (reTenant.provisionTenant) {
+      nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
     }
   }
   trackTabSessionKey(tabId, activeKey2);
