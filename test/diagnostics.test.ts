@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { extractRedirects, maxGap, pushCapped, summarizeSuspension } from '../src/diagnostics';
+import {
+  type BridgeSnap,
+  extractRedirects,
+  gateBlockEvidence,
+  maxGap,
+  pushCapped,
+  summarizeSuspension,
+} from '../src/diagnostics';
 import { sessionKeyFromUrl } from '../src/tab-binding';
 
 describe('pushCapped', () => {
@@ -71,5 +78,88 @@ describe('extractRedirects', () => {
       toKey: { tenant: 'acme', env: 'production' },
     });
     expect(hops[1].toKey).toEqual({ tenant: 'acme', env: 'production' });
+  });
+});
+
+// RC-3 (#166): when the panel gate blocks a valid, connected tenant tab, capture
+// a snapshot of the live registry and COMPUTE which candidate cause it matches
+// from the data — so the diagnosis is evidence, not a guess.
+describe('gateBlockEvidence (RC-3)', () => {
+  const b = (over: Partial<BridgeSnap>): BridgeSnap => ({
+    port: 19222,
+    tenant: 'f5-amer-ent',
+    env: 'production',
+    sessionId: 'tab-7',
+    contextBound: true,
+    open: true,
+    ...over,
+  });
+
+  it('reports not-a-block when the tab key is live among open bridges', () => {
+    const e = gateBlockEvidence({
+      tabId: 7,
+      sid: 'tab-7',
+      key: 'f5-amer-ent|production',
+      activePort: 19222,
+      targetTabId: 7,
+      bridges: [b({})],
+    });
+    expect(e.keyLive).toBe(true);
+    expect(e.matchingPort).toBe(19222);
+    expect(e.diagnosis).toContain('not-a-block');
+  });
+
+  it('flags stale-key when this tab worker advertises a different tenant|env', () => {
+    const e = gateBlockEvidence({
+      tabId: 7,
+      sid: 'tab-7',
+      key: 'f5-amer-ent|production',
+      activePort: 19222,
+      targetTabId: 7,
+      bridges: [b({ tenant: 'acme', env: 'staging' })], // own sid, wrong tenant
+    });
+    expect(e.keyLive).toBe(false);
+    expect(e.matchingPort).toBeNull();
+    expect(e.ownSidPorts).toEqual([19222]);
+    expect(e.diagnosis).toContain('stale-key');
+  });
+
+  it('flags asymmetric-frame when this tab worker advertised tenant XOR env', () => {
+    const e = gateBlockEvidence({
+      tabId: 7,
+      sid: 'tab-7',
+      key: 'f5-amer-ent|production',
+      activePort: 19222,
+      targetTabId: 7,
+      bridges: [b({ env: null })], // tenant set, env missing
+    });
+    expect(e.keyLive).toBe(false);
+    expect(e.diagnosis).toContain('asymmetric-frame');
+  });
+
+  it('flags no-own-worker when no open bridge advertises this tab sid', () => {
+    const e = gateBlockEvidence({
+      tabId: 7,
+      sid: 'tab-7',
+      key: 'f5-amer-ent|production',
+      activePort: 19223,
+      targetTabId: 9,
+      bridges: [b({ port: 19223, sessionId: 'tab-9', tenant: 'other', env: 'production' })],
+    });
+    expect(e.keyLive).toBe(false);
+    expect(e.ownSidPorts).toEqual([]);
+    expect(e.diagnosis).toContain('no-own-worker');
+  });
+
+  it('ignores a closed socket advertising the key (must be OPEN to count live)', () => {
+    const e = gateBlockEvidence({
+      tabId: 7,
+      sid: 'tab-7',
+      key: 'f5-amer-ent|production',
+      activePort: null,
+      targetTabId: 7,
+      bridges: [b({ open: false })],
+    });
+    expect(e.keyLive).toBe(false);
   });
 });

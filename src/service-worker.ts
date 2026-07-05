@@ -18,9 +18,16 @@ import {
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
-import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
+import { type DiagEvent, extractRedirects, gateBlockEvidence, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { portForTab, resolveChatPort, resolveToolTab, sidForTab } from './session-routing';
+import {
+  contextTabFor,
+  portForTab,
+  resolveChatPort,
+  resolveToolTab,
+  sidForTab,
+  staleTabPorts,
+} from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -874,8 +881,14 @@ chrome.runtime.onConnect.addListener((port) => {
       // reachable only by first-party extension contexts (no externally_connectable;
       // content scripts never open it), so the sender is our own trusted panel; and
       // resolveChatPort refuses any tabId lacking a live bound worker, so a stray id
-      // routes nowhere.
-      const target = resolveChatPort(typeof m.tabId === 'number' ? m.tabId : undefined, registry);
+      // routes nowhere. m.sessionKey is the tab's CURRENT "tenant|env": when present
+      // the worker must advertise that exact key, so a turn after a same-tab re-login
+      // can never resolve the OLD-tenant worker still lingering on this tab's sid (#166).
+      const target = resolveChatPort(
+        typeof m.tabId === 'number' ? m.tabId : undefined,
+        registry,
+        typeof m.sessionKey === 'string' ? m.sessionKey : undefined,
+      );
       if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
         port.postMessage({
           type: 'chat_error',
@@ -890,21 +903,54 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'chat_stop') {
-      sendTo(turnToBridgePort.get(m.id) ?? activePort, { type: 'chat_stop', id: m.id });
+      // Stop only the socket this turn was pinned to. No activePort fallback — a
+      // stop for an unknown/finished turn must target nothing, never the
+      // last-focused worker (which could abort a different tab's turn). (#166)
+      sendTo(turnToBridgePort.get(m.id), { type: 'chat_stop', id: m.id });
       return;
     }
     if (m.type === 'get_page_context') {
-      buildPageContext(targetTabId)
+      // Build context for the PANEL'S tab (m.tabId), not the global controlled
+      // tab — otherwise a turn's attached context comes from the automation tab
+      // when it differs from the focused tab. targetTabId is only a fallback for
+      // a caller that sent no tabId. (RC-2, #166)
+      const ctxTab = contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId);
+      buildPageContext(ctxTab)
         .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
         .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
       return;
     }
     if (m.type === 'chat_annotate') {
-      chatAnnotate(m, targetTabId).catch(() => {});
+      // Annotate the PANEL'S tab when supplied (parity with get_page_context);
+      // targetTabId only as a fallback. (RC-2, #166)
+      chatAnnotate(m, contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId)).catch(() => {});
       return;
     }
     if (m.type === 'status_request') {
       port.postMessage({ type: 'status', connected: anyOpen() });
+      return;
+    }
+    if (m.type === 'gate_blocked') {
+      // RC-3 evidence (#166): the panel blocked a tab it computed as `key`. Snapshot
+      // the live registry + routing globals and record a data-driven diagnosis into
+      // the diag ring buffer (read via diag_suspension). No fix here — evidence only.
+      const bridges = [...registry.values()].map((info) => ({
+        port: info.port,
+        tenant: info.tenant,
+        env: info.env,
+        sessionId: info.sessionId,
+        contextBound: info.contextBound,
+        open: sockets.get(info.port)?.readyState === WebSocket.OPEN,
+      }));
+      const evidence = gateBlockEvidence({
+        tabId: typeof m.tabId === 'number' ? m.tabId : null,
+        sid: typeof m.tabId === 'number' ? sidForTab(m.tabId) : null,
+        key: typeof m.key === 'string' ? m.key : null,
+        activePort: activePort ?? null,
+        targetTabId: targetTabId ?? null,
+        bridges,
+      });
+      recordDiag('gate_block', { diagnosis: evidence.diagnosis, evidence });
       return;
     }
   });
@@ -2847,15 +2893,18 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // tenant A's console to tenant B's, or away to a non-console URL): release the
   // stale worker (its context is the old tenant) and, for a new tenant, spawn a
   // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
-  const prevKey = tabSessionKeys.get(tabId);
-  if (
-    !manualPortPinned &&
-    prevKey !== undefined &&
-    prevKey !== activeKey2 &&
-    portForTab(registry, sidForTab(tabId)) !== undefined
-  ) {
+  //
+  // Detect staleness from the REGISTRY (rebuilt from hello_acks), not prevKey:
+  // tabSessionKeys is in-memory and an MV3 suspension drops it, which previously
+  // skipped this whole block and stranded the tab on the old tenant (#166). We
+  // also EVICT the stale entry immediately so a chat turn in the race window
+  // before the old socket closes can never resolve the old-tenant worker.
+  const stalePorts = manualPortPinned ? [] : staleTabPorts(registry, tabId, activeKey2);
+  if (stalePorts.length > 0) {
     nmSend({ type: 'release', sessionId: sidForTab(tabId) });
+    for (const p of stalePorts) registry.delete(p); // manager reaps via release; onclose is idempotent
     clearPortForTab(tabId);
+    broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
     if (activeKey2 !== null && activeKey2 !== '') {
       nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: activeKey2 });
     }
