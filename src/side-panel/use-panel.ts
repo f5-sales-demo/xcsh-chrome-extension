@@ -24,6 +24,7 @@ import {
   setMode as setConvMode,
   setTenantConv,
   startAssistant,
+  tabConvKey,
   tenantConv,
 } from '../references-store';
 import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
@@ -33,9 +34,6 @@ import { contextChipText, initPanelState, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
 const now = () => Date.now();
-// Per-(tenant,tab) conv-index key — tenant is part of the key so two tabs of one
-// tenant keep distinct transcripts and a re-login never carries (old:303–310).
-const tabConvKey = (sessionKey: string, tabId: number) => `${sessionKey}#${tabId}`;
 
 export function usePanel() {
   const [state, dispatch] = useReducer(panelReducer, undefined, () =>

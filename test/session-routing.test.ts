@@ -140,6 +140,25 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
   });
 });
 
+// B/C hardening (#166): tenantToPort/liveTenants fold same-tenant bridges to one
+// entry (last-writer-wins) — a documented fallback shape. Routing must NOT use
+// that fold: the per-tab sid path keeps two tabs of ONE tenant on DISTINCT
+// workers. This locks the per-tab path as authoritative so the fold can't
+// regress isolation. (The producer spawns one worker per sid — xcsh
+// manager.int.test.ts "two same-tenant tabs → two workers".)
+describe('same-tenant multi-tab isolation (B/C)', () => {
+  test('two tabs of one tenant resolve to distinct workers via the per-tab path', () => {
+    const reg = new Map<number, { sessionId: string; tenant: string; env: string }>([
+      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19223, { sessionId: 'tab-2', tenant: 'acme', env: 'staging' }],
+    ]);
+    expect(resolveChatPort(1, reg, 'acme|staging')).toBe(19222);
+    expect(resolveChatPort(2, reg, 'acme|staging')).toBe(19223);
+    expect(portForTab(reg, sidForTab(1))).toBe(19222);
+    expect(portForTab(reg, sidForTab(2))).toBe(19223);
+  });
+});
+
 // RC-2 (issue #166): the page-context snapshot attached to a chat turn must be
 // built for the PANEL'S active tab (the transcript's tab), not the global
 // controlled/automation tab — otherwise the context comes from the wrong tab
