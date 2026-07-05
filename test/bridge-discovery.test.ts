@@ -54,4 +54,23 @@ describe('bridge-discovery', () => {
       { tenant: 'beta|production', contextBound: false },
     ]);
   });
+
+  // Tenant-correlation contract (xcsh#1872 / #164): a bridge is usable only when
+  // it advertises BOTH tenant AND env. The panel's gate blocks input for a tab
+  // whose key is absent from liveTenants, so an ASYMMETRIC frame (tenant but no
+  // env, or env but no tenant) — which a producer CAN emit (e.g. a malformed
+  // "tenant|env" with no env half) — MUST be excluded here, not partially kept.
+  test('liveTenants + tenantToPort exclude asymmetric frames (tenant XOR env)', () => {
+    const m = reg(
+      [19222, 'full', 'production', 0], // both → kept
+      [19223, 'tenantonly', null, 0], // env missing → excluded
+      [19224, null, 'production', 0], // tenant missing → excluded
+      [19225, null, null, 0], // both missing → excluded
+      [19226, '', '', 0], // empty strings → excluded
+    );
+    expect(liveTenants(m)).toEqual([{ tenant: 'full|production', contextBound: false }]);
+    expect([...tenantToPort(m).keys()]).toEqual(['full|production']);
+    expect(portForTenant(m, 'tenantonly|production')).toBeUndefined();
+    expect(portForTenant(m, 'full|production')).toBe(19222);
+  });
 });
