@@ -22,6 +22,7 @@ import {
   setTenantConv,
   startAssistant,
   tabConv,
+  tabConvKey,
   tabSessionKey,
   tenantConv,
 } from '../src/references-store';
@@ -169,15 +170,30 @@ describe('SessionIndex (per-tenant session map)', () => {
     expect(tabSessionKey(idx, 11)).toBe('acme|staging#11');
     expect(tenantConv(idx, 'acme|staging#11')).toBe('conv-a11');
   });
-  it('migrates an old TabIndex using resolved session keys', () => {
+  it('migrates an old TabIndex to per-tab compound keys (reachable by the live path)', () => {
+    // #166 G: the live path reads byTenant ONLY by the compound "tenant|env#tabId"
+    // key (tabConvKey). Migration must produce that shape too, else a migrated conv
+    // is never matched (silently dropped) and a stale bare key orphans in byTenant.
     const idx = sessionIndexFromTabIndex([
       { tabId: 5, sessionKey: 'acme|staging', convId: 'conv-old-5' },
-      { tabId: 6, sessionKey: 'acme|staging', convId: 'conv-old-5' },
       { tabId: 7, sessionKey: 'globex|production', convId: 'conv-old-7' },
     ]);
-    expect(tenantConv(idx, 'acme|staging')).toBe('conv-old-5');
-    expect(tenantConv(idx, 'globex|production')).toBe('conv-old-7');
-    expect(tabSessionKey(idx, 6)).toBe('acme|staging');
+    // Reachable under the SAME compound key the live path computes.
+    expect(tenantConv(idx, tabConvKey('acme|staging', 5))).toBe('conv-old-5');
+    expect(tenantConv(idx, tabConvKey('globex|production', 7))).toBe('conv-old-7');
+    // No bare key leaks into byTenant.
+    expect(tenantConv(idx, 'acme|staging')).toBeUndefined();
+    expect(tabSessionKey(idx, 5)).toBe(tabConvKey('acme|staging', 5));
+  });
+  it('removeTabSession tolerates the compound key and keeps a conv shared by another live tab', () => {
+    // Two tabs of one tenant, distinct compound keys but the SAME shared convId.
+    let idx = setTenantConv(emptySessionIndex(), tabConvKey('acme|staging', 5), 5, 'conv-shared');
+    idx = setTenantConv(idx, tabConvKey('acme|staging', 5), 5, 'conv-shared'); // idempotent re-bind
+    idx = setTenantConv(idx, 'acme|staging#5-alias', 6, 'conv-shared'); // another tab → same conv
+    idx = removeTabSession(idx, 5);
+    expect(tabSessionKey(idx, 5)).toBeUndefined();
+    expect(tenantConv(idx, tabConvKey('acme|staging', 5))).toBeUndefined(); // tab 5's key pruned
+    expect(tabSessionKey(idx, 6)).toBe('acme|staging#5-alias'); // tab 6 untouched
   });
 });
 

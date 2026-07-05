@@ -25,6 +25,17 @@ describe('buildChatRequest', () => {
     expect('history_hint' in m).toBe(false);
     expect(m.mode).toBe('presentation');
   });
+  // RC-1 (#166): the panel supplies the tab's current session key so the SW can
+  // refuse a worker still bound to the tab's sid but advertising the OLD tenant.
+  it('carries tabId and sessionKey when given', () => {
+    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7, 'acme|staging');
+    expect(m.tabId).toBe(7);
+    expect(m.sessionKey).toBe('acme|staging');
+  });
+  it('omits sessionKey when not given', () => {
+    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7);
+    expect('sessionKey' in m).toBe(false);
+  });
 });
 
 describe('buildChatStop', () => {

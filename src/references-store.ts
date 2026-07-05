@@ -188,10 +188,20 @@ export function removeTab(index: TabIndex, tabId: number): { index: TabIndex; re
 // NOT delete the tenant's conversation — it persists for that tenant's other/
 // future tabs.
 export interface SessionIndex {
-  /** session key ("tenant|env") → conversation id. */
+  /** per-(tenant,tab) conv-index key ("tenant|env#tabId", see `tabConvKey`) →
+   *  conversation id. Tenant is part of the key so two tabs of one tenant keep
+   *  distinct transcripts and a re-login never carries the prior tenant's. */
   byTenant: Record<string, string>;
-  /** live tab id → session key. */
+  /** live tab id → its conv-index key. */
   byTab: Record<string, string>;
+}
+
+/** The per-(tenant,tab) conv-index key. Tenant is part of the key so two tabs of
+ *  one tenant keep distinct transcripts and a re-login never carries context
+ *  (#136). This is the ONLY shape stored in `byTenant` — the live panel and the
+ *  migration both key through here so no bare "tenant|env" entry can leak (#166). */
+export function tabConvKey(sessionKey: string, tabId: number): string {
+  return `${sessionKey}#${tabId}`;
 }
 
 export function emptySessionIndex(): SessionIndex {
@@ -233,11 +243,13 @@ export function removeTabSession(index: SessionIndex, tabId: number): SessionInd
 }
 
 /** Build a SessionIndex from an old TabIndex, given each tab's resolved session
- * key (best-effort migration; entries with an unresolvable key are dropped). */
+ * key (best-effort migration; entries with an unresolvable key are dropped). Keys
+ * byTenant on the compound `tabConvKey` — the SAME shape the live panel reads — so
+ * migrated conversations are reachable and no bare "tenant|env" key orphans (#166). */
 export function sessionIndexFromTabIndex(
   entries: Array<{ tabId: number; sessionKey: string; convId: string }>,
 ): SessionIndex {
   let idx = emptySessionIndex();
-  for (const e of entries) idx = setTenantConv(idx, e.sessionKey, e.tabId, e.convId);
+  for (const e of entries) idx = setTenantConv(idx, tabConvKey(e.sessionKey, e.tabId), e.tabId, e.convId);
   return idx;
 }

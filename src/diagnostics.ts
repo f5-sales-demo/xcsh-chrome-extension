@@ -62,6 +62,81 @@ export function summarizeSuspension(events: DiagEvent[]): SuspensionSummary {
   };
 }
 
+/** A live bridge as seen by the SW registry, flattened for a diagnostics snapshot. */
+export interface BridgeSnap {
+  port: number;
+  tenant: string | null;
+  env: string | null;
+  sessionId: string | null;
+  contextBound: boolean;
+  /** Whether the WebSocket to this bridge is currently OPEN. */
+  open: boolean;
+}
+
+/** Evidence captured when the panel gate blocks a valid, connected tenant tab
+ *  (RC-3, #166). `diagnosis` is COMPUTED from the snapshot, not guessed. */
+export interface GateBlockEvidence {
+  tabId: number | null;
+  /** `sidForTab(tabId)` — the per-tab worker id the tab expects. */
+  sid: string | null;
+  /** The tab's current "tenant|env" the panel computed. */
+  key: string | null;
+  /** Is `key` advertised by any OPEN bridge (what the gate checks)? */
+  keyLive: boolean;
+  /** Ports of OPEN bridges advertising this tab's sid (its own worker, if any). */
+  ownSidPorts: number[];
+  /** The `"tenant|env"` each own-sid bridge advertises (partials show the gap). */
+  ownSidKeys: string[];
+  /** Port with this tab's sid AND matching key — where a turn would route, or null. */
+  matchingPort: number | null;
+  activePort: number | null;
+  targetTabId: number | null;
+  diagnosis: string;
+  bridges: BridgeSnap[];
+}
+
+/** Compute gate-block evidence + a data-driven diagnosis from a registry snapshot.
+ *  Pure so it unit-tests without Chrome; the SW feeds it the live registry. */
+export function gateBlockEvidence(input: {
+  tabId: number | null;
+  sid: string | null;
+  key: string | null;
+  activePort: number | null;
+  targetTabId: number | null;
+  bridges: BridgeSnap[];
+}): GateBlockEvidence {
+  const open = input.bridges.filter((x) => x.open);
+  const keyOf = (x: BridgeSnap): string | null => (x.tenant && x.env ? `${x.tenant}|${x.env}` : null);
+  const keyLive = !!input.key && open.some((x) => keyOf(x) === input.key);
+  const ownSid = open.filter((x) => x.sessionId !== null && x.sessionId === input.sid);
+  const ownSidKeys = ownSid.map((x) => `${x.tenant ?? ''}|${x.env ?? ''}`);
+  const matching = ownSid.find((x) => keyOf(x) === input.key);
+  let diagnosis: string;
+  if (keyLive) {
+    diagnosis = 'not-a-block: tab key is live among open bridges';
+  } else if (ownSid.length === 0) {
+    diagnosis =
+      'no-own-worker: no open bridge advertises this tab sid (a connected socket belongs to another tab/tenant)';
+  } else if (ownSid.some((x) => (x.tenant && !x.env) || (!x.tenant && x.env))) {
+    diagnosis = 'asymmetric-frame: this tab worker advertised tenant XOR env (excluded from liveTenants)';
+  } else {
+    diagnosis = 'stale-key: this tab worker advertises a different tenant|env than the tab (RC-1 surfacing as a block)';
+  }
+  return {
+    tabId: input.tabId,
+    sid: input.sid,
+    key: input.key,
+    keyLive,
+    ownSidPorts: ownSid.map((x) => x.port),
+    ownSidKeys,
+    matchingPort: matching?.port ?? null,
+    activePort: input.activePort,
+    targetTabId: input.targetTabId,
+    diagnosis,
+    bridges: input.bridges,
+  };
+}
+
 /** One hop in a captured redirect chain, annotated with the resolved session key. */
 export interface RedirectHop {
   from: string;

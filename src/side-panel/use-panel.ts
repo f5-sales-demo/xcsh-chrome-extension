@@ -24,6 +24,7 @@ import {
   setMode as setConvMode,
   setTenantConv,
   startAssistant,
+  tabConvKey,
   tenantConv,
 } from '../references-store';
 import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
@@ -33,9 +34,6 @@ import { contextChipText, initPanelState, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
 const now = () => Date.now();
-// Per-(tenant,tab) conv-index key — tenant is part of the key so two tabs of one
-// tenant keep distinct transcripts and a re-login never carries (old:303–310).
-const tabConvKey = (sessionKey: string, tabId: number) => `${sessionKey}#${tabId}`;
 
 export function usePanel() {
   const [state, dispatch] = useReducer(panelReducer, undefined, () =>
@@ -119,6 +117,9 @@ export function usePanel() {
         dispatch({ type: 'set_inactive', label: `${key.tenant}·${key.env}` });
         dispatch({ type: 'input_blocked', blocked: true });
         dispatch({ type: 'set_conv', conv: newConversation(`conv-${crypto.randomUUID()}`, now()) });
+        // RC-3 evidence (#166): record WHY a connected tab blocked, so the live
+        // registry state (not a guess) names the cause. See diag_suspension.
+        bus.post({ type: 'gate_blocked', tabId: tab?.id, key: keyStr });
         return;
       }
       dispatch({ type: 'input_blocked', blocked: false });
@@ -127,6 +128,9 @@ export function usePanel() {
       dispatch({ type: 'set_active_tenant', label: `${key.tenant}·${key.env}` });
       // Swap when the tenant OR the tab changed (old:407).
       if (keyStr !== boundSessionKey.current || tab?.id !== prev) await switchToTenantSession(keyStr, tab?.id);
+      // Refresh context for the NEWLY-focused tab so the snapshot attached to the
+      // next turn is this tab's, not the previously-controlled tab's (RC-2, #166).
+      bus.post({ type: 'get_page_context', tabId: tab?.id });
     } else {
       // Active tab is NOT a tenant — enforce inactive every time (old:410–421).
       boundTabId.current = undefined;
@@ -198,7 +202,7 @@ export function usePanel() {
 
     // Boot (old:741–745).
     bus.post({ type: 'status_request' });
-    bus.post({ type: 'get_page_context' });
+    bus.post({ type: 'get_page_context', tabId: boundTabId.current });
     void gateToActiveTab();
 
     return () => {
@@ -289,7 +293,9 @@ export function usePanel() {
     }, TURN_TIMEOUT_MS);
     // Stamp the panel's bound tab so the SW routes this turn to THIS tab's worker
     // (resolveChatPort), not a global activePort that could hit another tab's busy
-    // session — the SW refuses a chat_request with no tabId (#148/#33).
+    // session — the SW refuses a chat_request with no tabId (#148/#33). Also stamp
+    // the tab's CURRENT session key so the SW refuses a worker still bound to this
+    // tab's sid but advertising the OLD tenant after a same-tab re-login (#166).
     bus.post(
       buildChatRequest(
         turnId,
@@ -298,6 +304,7 @@ export function usePanel() {
         s.conv.mode,
         s.conv.id,
         boundTabId.current,
+        boundSessionKey.current,
       ),
     );
   }
@@ -320,7 +327,7 @@ export function usePanel() {
   }
 
   function refreshContext() {
-    bus.post({ type: 'get_page_context' }); // old ctx-refresh handler, 711–713
+    bus.post({ type: 'get_page_context', tabId: boundTabId.current }); // old ctx-refresh handler, 711–713
   }
   function toggleContext() {
     dispatch({ type: 'toggle_context' }); // old ctx-detach handler, 715–718
