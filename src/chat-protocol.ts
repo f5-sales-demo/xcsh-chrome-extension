@@ -36,6 +36,8 @@ export interface ChatRequestMsg {
   mode: InteractionMode;
   history_hint?: string;
   tabId?: number; // the panel's bound tab, so the SW routes to THAT tab's worker (#33)
+  sessionKey?: string; // the tab's current "tenant|env"; SW refuses a worker on this
+  // tab's sid that advertises a different key (stale after a same-tab re-login, #166)
 }
 
 export interface ChatDeltaMsg {
@@ -87,10 +89,12 @@ export function buildChatRequest(
   mode: InteractionMode,
   historyHint?: string,
   tabId?: number,
+  sessionKey?: string | null,
 ): ChatRequestMsg {
   const msg: ChatRequestMsg = { type: 'chat_request', id, text, context, mode };
   if (historyHint !== undefined) msg.history_hint = historyHint;
   if (tabId !== undefined) msg.tabId = tabId;
+  if (sessionKey) msg.sessionKey = sessionKey;
   return msg;
 }
 

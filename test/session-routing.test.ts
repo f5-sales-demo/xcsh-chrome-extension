@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { portForTab, resolveChatPort, resolveToolTab, sidForTab } from '../src/session-routing';
+import { portForTab, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from '../src/session-routing';
 
 describe('sidForTab', () => {
   test('derives a stable sid from tabId', () => {
@@ -54,5 +54,81 @@ describe('late-bind adoption (pre-warm pool)', () => {
     // Now chat/tool routing resolves the same port for tab 7.
     expect(portForTab(reg, sidForTab(7))).toBe(19222);
     expect(resolveChatPort(7, reg)).toBe(19222);
+  });
+});
+
+// RC-1 (issue #166): wrong tenant after same-tab re-login. A tab re-tenants
+// (tenant A → B) but the sid ("tab-<id>") is stable, and the old-tenant worker
+// lingers in the registry until its socket closes (service-worker onclose). A
+// chat turn for the tab's NEW tenant must NOT be routed to a worker still
+// advertising the OLD tenant|env. `resolveChatPort` takes the tab's current
+// session key and refuses any worker whose advertised key differs.
+describe('resolveChatPort tenant guard (RC-1)', () => {
+  test('refuses a stale-tenant worker on the tab sid; routes only to the matching-tenant worker', () => {
+    // Only worker for tab-1 still advertises the OLD tenant (acme|staging) —
+    // its socket has not closed yet after the tab moved to beta|production.
+    const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
+      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+    ]);
+    // Guarded routing for the tab's CURRENT key refuses the stale worker.
+    expect(resolveChatPort(1, reg, 'beta|production')).toBeUndefined();
+    // The fresh worker for the new tenant registers (same sid, new tenant|env).
+    reg.set(19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' });
+    // Now the turn routes to the NEW-tenant worker, never the lingering old one.
+    expect(resolveChatPort(1, reg, 'beta|production')).toBe(19223);
+  });
+
+  test('a race with two ports on the same sid picks the port whose tenant matches', () => {
+    // Old worker (19222) and new worker (19223) both transiently advertise tab-1.
+    const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
+      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }],
+    ]);
+    expect(resolveChatPort(1, reg, 'beta|production')).toBe(19223);
+    expect(resolveChatPort(1, reg, 'acme|staging')).toBe(19222);
+  });
+
+  test('a worker advertising tenant but null env never matches a full key', () => {
+    const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
+      [19222, { sessionId: 'tab-1', tenant: 'beta', env: null }],
+    ]);
+    expect(resolveChatPort(1, reg, 'beta|production')).toBeUndefined();
+  });
+
+  test('omitting expectedKey preserves the legacy sid-only match (back-compat)', () => {
+    const reg = new Map([[19222, { sessionId: 'tab-1' }]]);
+    expect(resolveChatPort(1, reg)).toBe(19222);
+  });
+});
+
+// RC-1 source-side: detect workers still bound to a tab's sid whose advertised
+// tenant|env no longer matches the tab's CURRENT key, so the SW can evict them
+// from the registry (and release/reprovision) even after an MV3 suspension lost
+// the in-memory tabSessionKeys — this reads the registry, which is rebuilt from
+// hello_acks, so it does not depend on prevKey.
+describe('staleTabPorts (RC-1 re-tenant detection)', () => {
+  type R = Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>;
+  test('flags a worker on the tab sid whose tenant differs from the current key', () => {
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }]]);
+    expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([19222]);
+  });
+  test('keeps a worker whose tenant matches the current key', () => {
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }]]);
+    expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([]);
+  });
+  test('flags the worker when the tab navigated off-console (null current key)', () => {
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }]]);
+    expect(staleTabPorts(reg, 1, null)).toEqual([19222]);
+  });
+  test('returns nothing when the tab has no worker, and ignores other tabs', () => {
+    const reg: R = new Map([[19223, { sessionId: 'tab-2', tenant: 'acme', env: 'staging' }]]);
+    expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([]);
+  });
+  test('in an old+new race, flags only the stale (old-tenant) port', () => {
+    const reg: R = new Map([
+      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }],
+    ]);
+    expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([19222]);
   });
 });

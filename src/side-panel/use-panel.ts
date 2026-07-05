@@ -289,7 +289,9 @@ export function usePanel() {
     }, TURN_TIMEOUT_MS);
     // Stamp the panel's bound tab so the SW routes this turn to THIS tab's worker
     // (resolveChatPort), not a global activePort that could hit another tab's busy
-    // session — the SW refuses a chat_request with no tabId (#148/#33).
+    // session — the SW refuses a chat_request with no tabId (#148/#33). Also stamp
+    // the tab's CURRENT session key so the SW refuses a worker still bound to this
+    // tab's sid but advertising the OLD tenant after a same-tab re-login (#166).
     bus.post(
       buildChatRequest(
         turnId,
@@ -298,6 +300,7 @@ export function usePanel() {
         s.conv.mode,
         s.conv.id,
         boundTabId.current,
+        boundSessionKey.current,
       ),
     );
   }

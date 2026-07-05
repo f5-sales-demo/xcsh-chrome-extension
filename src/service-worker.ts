@@ -20,7 +20,7 @@ import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
-import { portForTab, resolveChatPort, resolveToolTab, sidForTab } from './session-routing';
+import { portForTab, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from './session-routing';
 import {
   type BindingState,
   decideBinding,
@@ -874,8 +874,14 @@ chrome.runtime.onConnect.addListener((port) => {
       // reachable only by first-party extension contexts (no externally_connectable;
       // content scripts never open it), so the sender is our own trusted panel; and
       // resolveChatPort refuses any tabId lacking a live bound worker, so a stray id
-      // routes nowhere.
-      const target = resolveChatPort(typeof m.tabId === 'number' ? m.tabId : undefined, registry);
+      // routes nowhere. m.sessionKey is the tab's CURRENT "tenant|env": when present
+      // the worker must advertise that exact key, so a turn after a same-tab re-login
+      // can never resolve the OLD-tenant worker still lingering on this tab's sid (#166).
+      const target = resolveChatPort(
+        typeof m.tabId === 'number' ? m.tabId : undefined,
+        registry,
+        typeof m.sessionKey === 'string' ? m.sessionKey : undefined,
+      );
       if (target === undefined || sockets.get(target)?.readyState !== WebSocket.OPEN) {
         port.postMessage({
           type: 'chat_error',
@@ -2847,15 +2853,18 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // tenant A's console to tenant B's, or away to a non-console URL): release the
   // stale worker (its context is the old tenant) and, for a new tenant, spawn a
   // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
-  const prevKey = tabSessionKeys.get(tabId);
-  if (
-    !manualPortPinned &&
-    prevKey !== undefined &&
-    prevKey !== activeKey2 &&
-    portForTab(registry, sidForTab(tabId)) !== undefined
-  ) {
+  //
+  // Detect staleness from the REGISTRY (rebuilt from hello_acks), not prevKey:
+  // tabSessionKeys is in-memory and an MV3 suspension drops it, which previously
+  // skipped this whole block and stranded the tab on the old tenant (#166). We
+  // also EVICT the stale entry immediately so a chat turn in the race window
+  // before the old socket closes can never resolve the old-tenant worker.
+  const stalePorts = manualPortPinned ? [] : staleTabPorts(registry, tabId, activeKey2);
+  if (stalePorts.length > 0) {
     nmSend({ type: 'release', sessionId: sidForTab(tabId) });
+    for (const p of stalePorts) registry.delete(p); // manager reaps via release; onclose is idempotent
     clearPortForTab(tabId);
+    broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
     if (activeKey2 !== null && activeKey2 !== '') {
       nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: activeKey2 });
     }
