@@ -18,7 +18,7 @@ import {
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
-import { type DiagEvent, extractRedirects, pushCapped, summarizeSuspension } from './diagnostics';
+import { type DiagEvent, extractRedirects, gateBlockEvidence, pushCapped, summarizeSuspension } from './diagnostics';
 import { runDispatch } from './dispatch';
 import {
   contextTabFor,
@@ -928,6 +928,29 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (m.type === 'status_request') {
       port.postMessage({ type: 'status', connected: anyOpen() });
+      return;
+    }
+    if (m.type === 'gate_blocked') {
+      // RC-3 evidence (#166): the panel blocked a tab it computed as `key`. Snapshot
+      // the live registry + routing globals and record a data-driven diagnosis into
+      // the diag ring buffer (read via diag_suspension). No fix here — evidence only.
+      const bridges = [...registry.values()].map((info) => ({
+        port: info.port,
+        tenant: info.tenant,
+        env: info.env,
+        sessionId: info.sessionId,
+        contextBound: info.contextBound,
+        open: sockets.get(info.port)?.readyState === WebSocket.OPEN,
+      }));
+      const evidence = gateBlockEvidence({
+        tabId: typeof m.tabId === 'number' ? m.tabId : null,
+        sid: typeof m.tabId === 'number' ? sidForTab(m.tabId) : null,
+        key: typeof m.key === 'string' ? m.key : null,
+        activePort: activePort ?? null,
+        targetTabId: targetTabId ?? null,
+        bridges,
+      });
+      recordDiag('gate_block', { diagnosis: evidence.diagnosis, evidence });
       return;
     }
   });

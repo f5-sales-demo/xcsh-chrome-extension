@@ -119,6 +119,9 @@ export function usePanel() {
         dispatch({ type: 'set_inactive', label: `${key.tenant}·${key.env}` });
         dispatch({ type: 'input_blocked', blocked: true });
         dispatch({ type: 'set_conv', conv: newConversation(`conv-${crypto.randomUUID()}`, now()) });
+        // RC-3 evidence (#166): record WHY a connected tab blocked, so the live
+        // registry state (not a guess) names the cause. See diag_suspension.
+        bus.post({ type: 'gate_blocked', tabId: tab?.id, key: keyStr });
         return;
       }
       dispatch({ type: 'input_blocked', blocked: false });
