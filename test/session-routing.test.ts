@@ -44,3 +44,15 @@ describe('resolveChatPort', () => {
     expect(resolveChatPort(undefined, reg)).toBeUndefined();
   });
 });
+describe('late-bind adoption (pre-warm pool)', () => {
+  test("routing follows a port re-identified from 'spare' to 'tab-<id>'", () => {
+    const reg = new Map<number, { sessionId: string }>([[19222, { sessionId: 'spare' }]]);
+    // A warm spare (sessionId 'spare') is bound to no tab.
+    expect(portForTab(reg, sidForTab(7))).toBeUndefined();
+    // Adoption: the worker late-binds and its tenant_changed updates the registry sessionId.
+    reg.set(19222, { sessionId: 'tab-7' });
+    // Now chat/tool routing resolves the same port for tab 7.
+    expect(portForTab(reg, sidForTab(7))).toBe(19222);
+    expect(resolveChatPort(7, reg)).toBe(19222);
+  });
+});
