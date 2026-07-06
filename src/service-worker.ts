@@ -22,6 +22,7 @@ import {
   type DiagEvent,
   extractRedirects,
   gateBlockEvidence,
+  isNoiseKind,
   pushCapped,
   summarizeActivations,
   summarizeSuspension,
@@ -291,24 +292,29 @@ let observingNetwork = false;
 // it SURVIVES service-worker restarts — the whole point is to measure MV3
 // suspension (gaps between keepalive ticks) and binds missed while suspended.
 const DIAG_CAP = 400;
+const NOISE_CAP = 60;
 const DIAG_KEY = 'xcsh.diag.suspension';
+const DIAG_NOISE_KEY = 'xcsh.diag.noise';
 let diagBuffer: DiagEvent[] = [];
+let diagNoise: DiagEvent[] = [];
 let diagFlushTimer: ReturnType<typeof setTimeout> | null = null;
 function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
-  pushCapped(diagBuffer, { t: Date.now(), event, ...detail }, DIAG_CAP);
+  const rec = { t: Date.now(), event, ...detail };
+  if (isNoiseKind(event)) pushCapped(diagNoise, rec, NOISE_CAP);
+  else pushCapped(diagBuffer, rec, DIAG_CAP);
   if (diagFlushTimer) return; // debounce persistence (~1s) to avoid storage churn
   diagFlushTimer = setTimeout(() => {
     diagFlushTimer = null;
-    chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+    chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
   }, 1000);
 }
 // Load persisted history on (re)start, then stamp this SW start — the gap
 // between the previous last event and this sw_start reveals the suspension window.
 chrome.storage.local
-  .get(DIAG_KEY)
+  .get([DIAG_KEY, DIAG_NOISE_KEY])
   .then((r) => {
-    const prior = (r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? [];
-    diagBuffer = prior.slice(-DIAG_CAP);
+    diagBuffer = ((r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? []).slice(-DIAG_CAP);
+    diagNoise = ((r?.[DIAG_NOISE_KEY] as DiagEvent[] | undefined) ?? []).slice(-NOISE_CAP);
     recordDiag('sw_start', {});
   })
   .catch(() => recordDiag('sw_start', {}));
@@ -333,7 +339,7 @@ function wsStateLabel(): string {
 chrome.runtime.onSuspend.addListener(() => {
   recordDiag('suspend', { wsState: wsStateLabel() });
   // Force a synchronous-ish flush; storage.set is best-effort during teardown.
-  chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+  chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
 });
 chrome.runtime.onSuspendCanceled.addListener(() => recordDiag('suspend_canceled', {}));
 
@@ -2798,10 +2804,11 @@ async function readNetwork(
 /** Read-only: the SW-lifecycle diagnostics buffer + a computed suspension summary
  * (restarts, suspends, max keepalive-tick gap = suspension window, missed binds). */
 async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; events: DiagEvent[] }> {
+  const merged = [...diagBuffer, ...diagNoise].sort((a, b) => a.t - b.t);
   return {
-    summary: summarizeSuspension(diagBuffer),
+    summary: summarizeSuspension(merged),
     turns: summarizeTurns(diagBuffer),
-    events: diagBuffer.slice(-DIAG_CAP),
+    events: merged.slice(-DIAG_CAP),
   };
 }
 
