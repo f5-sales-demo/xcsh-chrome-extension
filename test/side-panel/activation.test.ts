@@ -1,0 +1,184 @@
+import { describe, expect, it } from 'bun:test';
+import { activationReducer, GATES, initActivation, newlyResolvedGates } from '../../src/side-panel/activation';
+
+const reset = (over: Partial<{ tenant: boolean; cold: boolean; connected: boolean; workerLive: boolean }> = {}) =>
+  ({ kind: 'reset', tenant: true, cold: true, connected: false, workerLive: false, ...over }) as const;
+
+describe('initActivation', () => {
+  it('starts inactive with three pending gates', () => {
+    const s = initActivation();
+    expect(s.phase).toBe('inactive');
+    expect(s.runId).toBe(0);
+    expect(GATES.map((g) => s.gates[g].status)).toEqual(['pending', 'pending', 'pending']);
+  });
+});
+
+describe('reset', () => {
+  it('a non-tenant reset is inactive and bumps runId', () => {
+    const s = activationReducer(initActivation(), reset({ tenant: false }), 100);
+    expect(s.phase).toBe('inactive');
+    expect(s.runId).toBe(1);
+    expect(s.gates.bridge.status).toBe('pending');
+  });
+
+  it('a tenant reset with no signals activates only the bridge gate (readying)', () => {
+    const s = activationReducer(initActivation(), reset(), 100);
+    expect(s.phase).toBe('readying');
+    expect(s.gates.bridge.status).toBe('active');
+    expect(s.gates.bridge.startedAt).toBe(100);
+    expect(s.gates.worker.status).toBe('pending');
+  });
+
+  it('a tenant reset while connected cascades bridge→passed, worker→active', () => {
+    const s = activationReducer(initActivation(), reset({ connected: true }), 100);
+    expect(s.gates.bridge.status).toBe('passed');
+    expect(s.gates.bridge.ms).toBe(0); // startedAt===now on reset
+    expect(s.gates.worker.status).toBe('active');
+    expect(s.phase).toBe('readying');
+  });
+
+  it('a warm reset (connected + workerLive) cascades to page active', () => {
+    const s = activationReducer(initActivation(), reset({ connected: true, workerLive: true, cold: false }), 100);
+    expect(s.gates.bridge.status).toBe('passed');
+    expect(s.gates.worker.status).toBe('passed');
+    expect(s.gates.page.status).toBe('active');
+    expect(s.cold).toBe(false);
+    expect(s.phase).toBe('readying');
+  });
+});
+
+describe('gate advance events', () => {
+  const started = () => activationReducer(initActivation(), reset(), 100); // bridge active
+
+  it('bridge passes with elapsed ms and activates worker', () => {
+    const s = activationReducer(started(), { kind: 'bridge' }, 112);
+    expect(s.gates.bridge.status).toBe('passed');
+    expect(s.gates.bridge.ms).toBe(12);
+    expect(s.gates.worker.status).toBe('active');
+  });
+
+  it('worker then page reach ready with correct per-gate ms', () => {
+    let s = activationReducer(started(), { kind: 'bridge' }, 112);
+    s = activationReducer(s, { kind: 'worker' }, 604); // 604-112
+    expect(s.gates.worker.ms).toBe(492);
+    expect(s.gates.page.status).toBe('active');
+    s = activationReducer(s, { kind: 'page' }, 742); // 742-604
+    expect(s.gates.page.ms).toBe(138);
+    expect(s.phase).toBe('ready');
+  });
+
+  it('ignores out-of-order events (page before worker is a no-op)', () => {
+    const s = activationReducer(started(), { kind: 'page' }, 200);
+    expect(s.gates.page.status).toBe('pending');
+    expect(s.phase).toBe('readying');
+  });
+
+  it('a duplicate bridge event does not re-stamp ms', () => {
+    const one = activationReducer(started(), { kind: 'bridge' }, 112);
+    const two = activationReducer(one, { kind: 'bridge' }, 999);
+    expect(two.gates.bridge.ms).toBe(12);
+    expect(two.gates.worker.status).toBe('active');
+  });
+});
+
+describe('timeouts (hard vs soft phases)', () => {
+  it('bridge timeout → disconnected', () => {
+    const s = activationReducer(
+      activationReducer(initActivation(), reset(), 100),
+      { kind: 'timeout', gate: 'bridge' },
+      10_100,
+    );
+    expect(s.gates.bridge.status).toBe('stalled');
+    expect(s.phase).toBe('disconnected');
+  });
+
+  it('worker timeout → blocked', () => {
+    let s = activationReducer(initActivation(), reset({ connected: true }), 100); // worker active
+    s = activationReducer(s, { kind: 'timeout', gate: 'worker' }, 15_100);
+    expect(s.phase).toBe('blocked');
+  });
+
+  it('page timeout → degraded (soft: bridge+worker passed)', () => {
+    let s = activationReducer(initActivation(), reset({ connected: true, workerLive: true }), 100); // page active
+    s = activationReducer(s, { kind: 'timeout', gate: 'page' }, 5_100);
+    expect(s.gates.page.status).toBe('stalled');
+    expect(s.phase).toBe('degraded');
+  });
+
+  it('a timeout for a gate that already passed is a no-op', () => {
+    let s = activationReducer(initActivation(), reset({ connected: true }), 100); // bridge passed
+    s = activationReducer(s, { kind: 'timeout', gate: 'bridge' }, 10_100);
+    expect(s.gates.bridge.status).toBe('passed');
+    expect(s.phase).toBe('readying');
+  });
+});
+
+describe('retry', () => {
+  it('re-activates a stalled worker gate and returns to readying', () => {
+    let s = activationReducer(initActivation(), reset({ connected: true }), 100);
+    s = activationReducer(s, { kind: 'timeout', gate: 'worker' }, 15_100);
+    expect(s.phase).toBe('blocked');
+    s = activationReducer(s, { kind: 'retry' }, 16_000);
+    expect(s.gates.worker.status).toBe('active');
+    expect(s.gates.worker.startedAt).toBe(16_000);
+    expect(s.gates.bridge.status).toBe('passed'); // bridge stays passed
+    expect(s.phase).toBe('readying');
+  });
+
+  it('retry is a no-op when the worker gate is not stalled', () => {
+    const s0 = activationReducer(initActivation(), reset({ connected: true }), 100);
+    const s1 = activationReducer(s0, { kind: 'retry' }, 200);
+    expect(s1).toEqual(s0);
+  });
+});
+
+describe('newlyResolvedGates', () => {
+  it('emits a record for each gate that resolved between two states', () => {
+    const a = activationReducer(initActivation(), reset(), 100); // bridge active
+    const b = activationReducer(a, { kind: 'bridge' }, 112);
+    const recs = newlyResolvedGates(a, b);
+    expect(recs).toEqual([{ runId: 1, gate: 'bridge', ms: 12, cold: true, phase: 'readying', outcome: 'passed' }]);
+  });
+
+  it('stamps total on the page-passed record', () => {
+    let s = activationReducer(initActivation(), reset(), 100);
+    s = activationReducer(s, { kind: 'bridge' }, 112);
+    s = activationReducer(s, { kind: 'worker' }, 604);
+    const before = s;
+    const after = activationReducer(s, { kind: 'page' }, 742);
+    const recs = newlyResolvedGates(before, after);
+    expect(recs[0]).toEqual({
+      runId: 1,
+      gate: 'page',
+      ms: 138,
+      cold: true,
+      phase: 'ready',
+      outcome: 'passed',
+      total: 642,
+    });
+  });
+
+  it('treats a runId change as a fresh run (emits new-run passes even if the old run had them)', () => {
+    // warm run 1 fully ready, then a warm reset to run 2 that cascades bridge+worker again
+    let s = activationReducer(initActivation(), reset({ connected: true, workerLive: true }), 100);
+    s = activationReducer(s, { kind: 'page' }, 150); // run 1 ready
+    const prev = s;
+    const next = activationReducer(s, reset({ connected: true, workerLive: true }), 200); // run 2
+    const gates = newlyResolvedGates(prev, next).map((r) => r.gate);
+    expect(gates).toEqual(['bridge', 'worker']); // both re-emitted for run 2 (page still active)
+    expect(newlyResolvedGates(prev, next).every((r) => r.runId === 2)).toBe(true);
+  });
+
+  it('emits a stalled outcome record on timeout', () => {
+    const a = activationReducer(initActivation(), reset({ connected: true }), 100);
+    const b = activationReducer(a, { kind: 'timeout', gate: 'worker' }, 15_100);
+    expect(newlyResolvedGates(a, b)).toEqual([
+      { runId: 1, gate: 'worker', ms: 15_000, cold: true, phase: 'blocked', outcome: 'stalled' },
+    ]);
+  });
+
+  it('emits nothing when no gate resolved', () => {
+    const a = activationReducer(initActivation(), reset(), 100);
+    expect(newlyResolvedGates(a, a)).toEqual([]);
+  });
+});
