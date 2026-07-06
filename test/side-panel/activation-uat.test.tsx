@@ -67,6 +67,10 @@ const lastReqId = (posted: Record<string, unknown>[]) =>
 const txt = (c: Element) => c.textContent ?? '';
 const sendDisabled = (c: Element) =>
   (c.querySelector('#send') as HTMLButtonElement | null)?.hasAttribute('disabled') ?? false;
+const placeholder = (c: Element) =>
+  (c.querySelector('#input') as HTMLTextAreaElement | null)?.getAttribute('placeholder');
+
+const NON_TENANT_TAB = { id: 9, url: 'https://example.com/some/page' };
 
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => {
@@ -182,5 +186,53 @@ describe('activation readiness UAT', () => {
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…');
     expect(sendDisabled(h.container)).toBe(false); // recovered all the way to ready
+  });
+
+  // Inactive path: a tab whose URL does not resolve to an F5 XC tenant never gates.
+  // No overlay, composer usable, default placeholder — the panel is simply idle.
+  it('non-tenant tab is inactive: no overlay, input enabled, default placeholder', async () => {
+    const h = mount(NON_TENANT_TAB);
+    await settle();
+    expect(txt(h.container)).not.toContain('getting ready…');
+    expect(txt(h.container)).not.toContain('starting worker…');
+    expect(sendDisabled(h.container)).toBe(false);
+    expect(placeholder(h.container)).toBe('ask xcsh about this page…');
+  });
+
+  // Worker recovery via a `bridges` frame (not the Retry button): with the worker
+  // gate active (status connected, no worker yet), a bridges frame that lists this
+  // tab's tenant as live passes the worker gate and drives on toward page/ready.
+  it('worker gate passes via a bridges frame and proceeds toward ready', async () => {
+    const h = mount(F5_TAB);
+    await settle();
+    h.push({ type: 'status', connected: true }); // bridge passes → worker active
+    await settle();
+    expect(txt(h.container)).toContain('starting worker…'); // worker gate in flight
+
+    h.push({ type: 'bridges', tenants: [{ tenant: F5_KEY, env: 'production' }] }); // this tab's worker is live
+    await settle();
+    expect(txt(h.container)).not.toContain('starting worker…'); // left the worker gate
+    const runId = lastReqId(h.posted);
+    expect(typeof runId).toBe('number'); // page gate now active → snapshot requested
+    expect(h.posted.some((m) => m.type === 'get_page_context' && m.reqId === runId)).toBe(true);
+  });
+
+  // Positive companion to the superseded-run case: the page gate passes ONLY for a
+  // page_context whose reqId equals the current run's reqId — a matching frame
+  // resolves the gate and reveals the panel.
+  it('page gate passes for a page_context whose reqId matches the current run', async () => {
+    const h = mount(F5_TAB);
+    await settle();
+    h.push({ type: 'status', connected: true }); // bridge passes → worker active
+    await settle();
+    h.push({ type: 'bridges', tenants: [{ tenant: F5_KEY, env: 'production' }] }); // worker passes → page active
+    await settle();
+    const runId = lastReqId(h.posted) as number;
+    expect(typeof runId).toBe('number');
+    expect(txt(h.container)).toContain('getting ready…'); // page still pending
+    h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId }); // MATCHES
+    await settle();
+    expect(txt(h.container)).not.toContain('getting ready…'); // matching reqId → page passes
+    expect(sendDisabled(h.container)).toBe(false);
   });
 });
