@@ -60,6 +60,24 @@ describe('panelReducer', () => {
     expect(composerPlaceholder(base())).toBe('ask xcsh about this page…');
   });
 
+  it('composerPlaceholder: "starting" for BOTH readying and blocked; default for ready, degraded, inactive', () => {
+    const readying = act({ connected: true }); // worker active
+    const blocked = activationReducer(act({ connected: true }), { kind: 'timeout', gate: 'worker' }, 15_100);
+    const ready = activationReducer(act({ connected: true, workerLive: true }), { kind: 'page' }, 50);
+    const degraded = activationReducer(
+      act({ connected: true, workerLive: true }),
+      { kind: 'timeout', gate: 'page' },
+      5_100,
+    );
+    const starting = 'starting xcsh for this tab…';
+    const dflt = 'ask xcsh about this page…';
+    expect(composerPlaceholder({ ...base(), activation: readying })).toBe(starting);
+    expect(composerPlaceholder({ ...base(), activation: blocked })).toBe(starting);
+    expect(composerPlaceholder({ ...base(), activation: ready })).toBe(dflt);
+    expect(composerPlaceholder({ ...base(), activation: degraded })).toBe(dflt);
+    expect(composerPlaceholder(base())).toBe(dflt); // inactive
+  });
+
   it('derives context-chip text from the activation phase', () => {
     expect(contextChipText(base())).toBe('open an F5 XC console page'); // inactive
     const ready = {
@@ -78,6 +96,14 @@ describe('panelReducer', () => {
       ),
     };
     expect(contextChipText(degraded)).toBe('page unavailable');
+  });
+
+  it('contextChipText: attachContext off → "context off"; on but no contextMeta → "no page attached"', () => {
+    const readyAct = activationReducer(act({ connected: true, workerLive: true }), { kind: 'page' }, 50);
+    const off = { ...base(), attachContext: false, contextMeta: { title: 'Load Balancers' }, activation: readyAct };
+    expect(contextChipText(off)).toBe('context off'); // toggle off wins even with a title present
+    const onNoMeta = { ...base(), attachContext: true, contextMeta: null, activation: readyAct };
+    expect(contextChipText(onNoMeta)).toBe('no page attached');
   });
 });
 
