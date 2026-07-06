@@ -181,6 +181,32 @@ describe('panel routing UAT (#166)', () => {
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating to Health Checks.'));
   });
 
+  it('#180: a connected tenant tab with no worker shows "starting xcsh…", cleared once it binds', async () => {
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    h.pushToPanel({ type: 'status', connected: true });
+    h.pushToPanel({ type: 'bridges', tenants: [] }); // connected, but no worker for this tenant yet
+
+    await waitFor(() => expect(h.api().state.provisioning).toBe(true));
+    expect(h.api().placeholder).toBe('starting xcsh for this tab…');
+    expect(h.api().state.inputBlocked).toBe(true);
+
+    // Worker binds → the tenant goes live → provisioning clears and input unblocks.
+    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: true }] });
+    await waitFor(() => expect(h.api().state.provisioning).toBe(false));
+    expect(h.api().state.inputBlocked).toBe(false);
+    expect(h.api().placeholder).toBe('ask xcsh about this page…');
+  });
+
+  it('#180: a blocked tab that is NOT connected does not show "starting" (real connection issue)', async () => {
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    h.pushToPanel({ type: 'status', connected: false });
+    h.pushToPanel({ type: 'bridges', tenants: [] });
+
+    await waitFor(() => expect(h.api().state.inputBlocked).toBe(true));
+    expect(h.api().state.provisioning).toBe(false);
+    expect(h.api().placeholder).toBe('ask xcsh about this page…');
+  });
+
   it('switching to a DIFFERENT tab mid-turn DOES suspend (no cross-tab bleed)', async () => {
     // The other direction of the same guard: a genuine tab switch must still
     // suspend the in-flight turn so tab 8 can start its own and tab 7's stream is
