@@ -10,11 +10,12 @@ export const PANEL_CSS = `
 * { box-sizing: border-box; }
 html,body { margin:0; height:100%; }
 body { background: var(--charcoal); color: var(--bright-white);
-  font: 13px/1.5 var(--font-mono); display:flex; flex-direction:column; position:relative; }
-header { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--subtle-gray); }
-header .mark { color: var(--f5-red); font-weight:700; letter-spacing:.05em; }
-header .sub { color: var(--dim); }
-#sess { font-size:11px; color: var(--dim); white-space:nowrap; margin-left:auto; }
+  font: 13px/1.5 var(--font-mono); position:relative; }
+/* Preact mounts into #root, so the full-height flex column must live here (not on
+   body) — otherwise #root shrinks to content and the transcript's flex:1 has no
+   height to grow into, stranding the composer below empty space. #root is also the
+   positioning context for the activation overlay (position:absolute; inset:0). */
+#root { height:100%; display:flex; flex-direction:column; position:relative; }
 .dot { width:8px; height:8px; border-radius:50%; background: var(--alert-red); }
 .dot.on { background: var(--signal-green); }
 #mode { background: var(--deep-charcoal); color: var(--bright-white); border:1px solid var(--subtle-gray);
@@ -26,7 +27,7 @@ header .sub { color: var(--dim); }
 .chip button { margin-left:auto; background:none; border:1px solid var(--subtle-gray); color: var(--dim);
   border-radius:6px; padding:2px 8px; cursor:pointer; font:inherit; }
 .chip button + button { margin-left:6px; }
-#messages { flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+#messages { flex:1; min-height:0; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
 .row { display:grid; grid-template-columns: var(--gutter) 1fr; column-gap:8px; }
 .gutter { color: var(--bright-white); text-align:center; }
 .g-thinking, .g-user { color: var(--f5-red); }
@@ -41,15 +42,31 @@ header .sub { color: var(--dim); }
 pre.code { background:#05070a; border:1px solid var(--subtle-gray); border-radius:6px; padding:8px; overflow:auto; }
 code { background:#05070a; padding:1px 5px; border-radius:4px; }
 .spin { animation: spin 1s steps(8) infinite; } @keyframes spin { to { opacity:.4 } }
-.statusbar { display:flex; align-items:center; font-size:11px; border-top:1px solid var(--subtle-gray); }
-.seg { position:relative; padding:2px 10px 2px 8px; }
-.seg .sep { position:absolute; right:-7px; top:0; z-index:1; }
-.seg-context { margin-left:auto; }
-form#composer { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--subtle-gray); }
-#input { flex:1; resize:none; min-height:38px; max-height:140px; background: var(--deep-charcoal);
-  color: var(--bright-white); border:1px solid var(--subtle-gray); border-radius:8px; padding:8px 10px; font:inherit; }
-#send, #stop { background: var(--f5-red); color:#fff; border:none; border-radius:8px; padding:0 14px; cursor:pointer; font:inherit; }
-#send:disabled { opacity:.5; cursor:default; }
+/* The statusline is embedded ON the composer's top border (xcsh-style), not a
+   separate bar above it: absolutely positioned so its chips straddle the frame. */
+.statusbar { position:absolute; top:-11px; left:12px; right:12px; display:flex; align-items:center; height:20px; font-size:11px; }
+.statusbar .seg { position:relative; display:flex; align-items:center; height:20px; padding:2px 10px; white-space:nowrap; }
+.statusbar .sep-r { position:absolute; right:-0.55em; top:0; z-index:1; }
+.statusbar .sep-l { position:absolute; left:-0.55em; top:0; z-index:1; }
+.seg-spacer { flex:1; }
+/* Composer — the shared "InputBar" look: a rounded, red-bordered box holding the
+   editor on top and a footer toolbar (mode pill + icon send) below. Radius scale
+   4/6/8 and layout mirror the VSCode extension so both surfaces read as one. */
+form#composer { position:relative; display:flex; flex-direction:column; margin:20px 12px 10px; background: var(--deep-charcoal);
+  border:1px solid var(--f5-red); border-radius:8px; }
+.inputEditorContainer { padding:10px 12px; }
+#input { display:block; width:100%; resize:none; min-height:20px; max-height:140px; overflow-y:auto;
+  background:transparent; color: var(--bright-white); border:none; outline:none; padding:0; font:inherit; line-height:1.5; }
+#input::placeholder { color: var(--dim); }
+.inputFooter { display:flex; align-items:center; gap:4px; padding:4px 8px; border-top:1px solid var(--subtle-gray); }
+.footerSpacer { flex:1; }
+.footerBtn { display:flex; align-items:center; gap:4px; background:none; border:none; color: var(--cool-gray);
+  cursor:pointer; padding:4px 8px; border-radius:4px; font:inherit; font-size:12px; }
+.footerBtn:hover { color: var(--bright-white); }
+.modeBtn { color: var(--bright-white); border:1px solid var(--subtle-gray); border-radius:6px; font-weight:500; }
+.modeBtn:hover { border-color: var(--f5-red); }
+.sendBtn { background: var(--f5-red); color:#fff; border-radius:6px; padding:4px 8px; }
+.sendBtn:disabled { opacity:.5; cursor:default; }
 .activation-overlay { position:absolute; inset:0; z-index:5; display:flex; flex-direction:column;
   align-items:center; justify-content:center; gap:10px; background: var(--charcoal); padding:24px; }
 .activation-overlay .ov-spinner { color: var(--f5-red); font-size:20px; }
