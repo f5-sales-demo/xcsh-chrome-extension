@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'bun:test';
 import { newConversation, startAssistant } from '../../src/references-store';
-import { contextChipText, initPanelState, panelReducer } from '../../src/side-panel/state';
+import { composerPlaceholder, contextChipText, initPanelState, panelReducer } from '../../src/side-panel/state';
 
 const base = () => initPanelState(newConversation('c1', 0));
+
+describe('provisioning indicator (#180)', () => {
+  it('composerPlaceholder shows "starting xcsh…" while provisioning, else the default', () => {
+    expect(composerPlaceholder({ ...base(), provisioning: true })).toBe('starting xcsh for this tab…');
+    expect(composerPlaceholder({ ...base(), provisioning: false })).toBe('ask xcsh about this page…');
+  });
+  it('set_provisioning toggles the flag', () => {
+    const on = panelReducer(base(), { type: 'set_provisioning', on: true });
+    expect(on.provisioning).toBe(true);
+    expect(panelReducer(on, { type: 'set_provisioning', on: false }).provisioning).toBe(false);
+  });
+  it('becoming an active tenant clears a pending provisioning indicator (worker bound)', () => {
+    const provisioning = panelReducer(base(), { type: 'set_provisioning', on: true });
+    const active = panelReducer(provisioning, { type: 'set_active_tenant', label: 'acme·staging' });
+    expect(active.provisioning).toBe(false);
+  });
+});
 
 describe('panelReducer', () => {
   it('toggles connection', () => {
