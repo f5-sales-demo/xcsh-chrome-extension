@@ -1,7 +1,5 @@
 import { Composer } from './components/Composer';
 import { ContextChip } from './components/ContextChip';
-import { Header } from './components/Header';
-import { StatusBar } from './components/StatusBar';
 import { Transcript } from './components/Transcript';
 import { usePanel } from './use-panel';
 
@@ -10,22 +8,23 @@ export function App() {
   const s = p.state;
   return (
     <>
-      <Header
-        mode={s.conv.mode}
-        onMode={p.setMode}
-        sessionLabel={s.sessionLabel}
+      <ContextChip
+        label={p.contextLabel}
         connected={s.connected}
-        sessionTitle=""
+        onRefresh={p.refreshContext}
+        onDetach={p.toggleContext}
       />
-      <ContextChip label={p.contextLabel} onRefresh={p.refreshContext} onDetach={p.toggleContext} />
       <Transcript conv={s.conv} streaming={s.active !== null} />
-      <StatusBar model={s.conv.mode} contextPct={null} contextLabel={p.contextLabel} connected={s.connected} />
       <Composer
         disabled={s.inputBlocked}
         placeholder={p.placeholder}
         sending={s.active !== null}
+        mode={s.conv.mode}
+        onMode={p.setMode}
         onSend={p.sendMessage}
         onStop={p.stop}
+        contextPct={null}
+        sessionLabel={s.sessionLabel}
       />
     </>
   );

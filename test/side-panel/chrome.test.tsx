@@ -1,37 +1,44 @@
 import { describe, expect, it } from 'bun:test';
 import { fireEvent, render } from '@testing-library/preact';
 import { Composer } from '../../src/side-panel/components/Composer';
-import { Header } from '../../src/side-panel/components/Header';
+import { ContextChip } from '../../src/side-panel/components/ContextChip';
 import { StatusBar } from '../../src/side-panel/components/StatusBar';
 
 describe('chrome components', () => {
-  it('shows the session link and connection state in the header', () => {
+  it('context chip shows the page label and the bridge connection dot', () => {
     const { container, getByText } = render(
-      <Header mode="educational" onMode={() => {}} sessionLabel="acme·production" connected={true} sessionTitle="" />,
+      <ContextChip label="F5 Distributed Cloud Console" connected={true} onRefresh={() => {}} onDetach={() => {}} />,
     );
-    expect(getByText('acme·production')).toBeTruthy();
+    expect(getByText('F5 Distributed Cloud Console')).toBeTruthy();
     expect(container.querySelector('.dot.on')).toBeTruthy();
   });
 
-  it('statusbar shows model + context, and no path/git segment', () => {
-    const { container, getByText } = render(
-      <StatusBar model="opus" contextPct={42} contextLabel="Load Balancers" connected={true} />,
-    );
-    expect(getByText(/opus/)).toBeTruthy();
+  it('statusbar shows context% and the tenant session identity, but no cwd/git', () => {
+    const { container, getByText } = render(<StatusBar contextPct={42} sessionLabel="acme·production" />);
     expect(getByText(/42%/)).toBeTruthy();
+    expect(getByText(/acme·production/)).toBeTruthy();
+    expect(container.querySelector('.seg-session')).toBeTruthy();
+    // The browser session is tenant-tied, not filesystem-tied: no cwd/path or git.
     expect(container.querySelector('.seg-path')).toBeNull();
     expect(container.querySelector('.seg-git')).toBeNull();
   });
 
   it('composer sends trimmed text and clears', () => {
     let sent = '';
-    const { getByPlaceholderText, getByText } = render(
-      <Composer disabled={false} sending={false} onSend={(t) => (sent = t)} onStop={() => {}} />,
+    const { container, getByPlaceholderText } = render(
+      <Composer
+        disabled={false}
+        sending={false}
+        mode="educational"
+        onMode={() => {}}
+        onSend={(t) => (sent = t)}
+        onStop={() => {}}
+      />,
     );
     const ta = getByPlaceholderText(/ask xcsh/i) as HTMLTextAreaElement;
     ta.value = '  hello  ';
     fireEvent.input(ta);
-    fireEvent.click(getByText('send'));
+    fireEvent.click(container.querySelector('#send') as HTMLButtonElement);
     expect(sent).toBe('hello');
   });
 });
