@@ -285,6 +285,7 @@ const TTFT_STAGE_ORDER = [
  *  children are present the envelope must not be summed alongside them. */
 const TTFT_ENVELOPES: Record<string, string[]> = {
   route_first_token: ['chat_handler', 'provider_ttft'],
+  provision_to_worker: ['manager_provision', 'worker_boot'],
 };
 
 type SpanEvt = DiagEvent & { stage: string; proc: string; ms: number; id?: string; sid?: string; cold?: boolean };
@@ -300,11 +301,18 @@ export function summarizeTtft(events: DiagEvent[]): TtftTimeline | null {
   const turnId = withId[withId.length - 1].id as string;
   const link = [...spans].reverse().find((s) => s.id === turnId && typeof s.sid === 'string');
   const sid = link?.sid ?? null;
-  const cold = link?.cold === true;
-  // Attach cold-start (per-sid) spans only when the linked turn is itself cold:
+  // The send_to_route heuristic flags the session-ESTABLISHING turn (fresh worker
+  // registration), which is the correct attachment gate — it fires for both a cold
+  // spawn and a warm adopt. It cannot tell spawn from adopt; an xcsh cold-start span
+  // (proc 'xcsh', carries an explicit cold flag + sid) is authoritative for that.
+  const establishing = link?.cold === true;
+  const authoritative =
+    sid !== null ? spans.find((s) => s.sid === sid && s.proc === 'xcsh' && typeof s.cold === 'boolean') : undefined;
+  const cold = establishing ? (authoritative ? authoritative.cold === true : true) : false;
+  // Attach cold-start (per-sid) spans only when the linked turn is establishing:
   // provision_to_worker / gates / sw_to_ws belong to the turn that established the
   // session, not to a later warm turn that happens to share the same sid.
-  const picked = spans.filter((s) => s.id === turnId || (cold && sid !== null && s.sid === sid));
+  const picked = spans.filter((s) => s.id === turnId || (establishing && sid !== null && s.sid === sid));
   const byStage = new Map<string, TtftStage>();
   for (const s of picked) {
     byStage.set(s.stage, {
