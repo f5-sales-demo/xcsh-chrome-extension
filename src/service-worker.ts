@@ -23,6 +23,7 @@ import {
   extractRedirects,
   gateBlockEvidence,
   pushCapped,
+  summarizeActivations,
   summarizeSuspension,
   summarizeTurns,
 } from './diagnostics';
@@ -933,9 +934,10 @@ chrome.runtime.onConnect.addListener((port) => {
       // when it differs from the focused tab. targetTabId is only a fallback for
       // a caller that sent no tabId. (RC-2, #166)
       const ctxTab = contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId);
+      const reqId = m.reqId; // activation-run correlation token (echoed back verbatim)
       buildPageContext(ctxTab)
-        .then((snapshot) => port.postMessage({ type: 'page_context', snapshot }))
-        .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e) }));
+        .then((snapshot) => port.postMessage({ type: 'page_context', snapshot, reqId }))
+        .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e), reqId }));
       return;
     }
     if (m.type === 'chat_annotate') {
@@ -946,6 +948,20 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (m.type === 'status_request') {
       port.postMessage({ type: 'status', connected: anyOpen() });
+      return;
+    }
+    if (m.type === 'activation_timing') {
+      // Per-gate readiness timing from the panel → durable diag ring buffer,
+      // grouped per run and surfaced by diag_activation. Store fields verbatim.
+      recordDiag('activation', {
+        runId: m.runId,
+        gate: m.gate,
+        ms: m.ms,
+        cold: m.cold,
+        phase: m.phase,
+        outcome: m.outcome,
+        ...(typeof m.total === 'number' ? { total: m.total } : {}),
+      });
       return;
     }
     if (m.type === 'gate_blocked') {
@@ -1133,6 +1149,7 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
   read_console: readConsole,
   read_network: readNetwork,
   diag_suspension: diagSuspension,
+  diag_activation: diagActivation,
   // Read-only diagnostics for the agent — expose only a short sessionId suffix,
   // never the full process id (tenant-isolation hardening).
   diag_bridges: () =>
@@ -2786,6 +2803,12 @@ async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; eve
     turns: summarizeTurns(diagBuffer),
     events: diagBuffer.slice(-DIAG_CAP),
   };
+}
+
+/** Read-only: per-gate tab-activation readiness timings grouped by run
+ *  (bridge/worker/page ms, total, cold/warm, terminal phase). */
+async function diagActivation(): Promise<{ runs: unknown }> {
+  return { runs: summarizeActivations(diagBuffer) };
 }
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,

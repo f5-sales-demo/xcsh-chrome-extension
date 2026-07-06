@@ -551,6 +551,16 @@
       "flags": {}
     },
     {
+      "name": "diag_activation",
+      "summary": "Diagnostic: per-gate tab-activation readiness timings (bridge/worker/page), cold/warm.",
+      "category": "read",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "flags": {}
+    },
+    {
       "name": "capture_login_flow",
       "summary": "Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).",
       "category": "read",

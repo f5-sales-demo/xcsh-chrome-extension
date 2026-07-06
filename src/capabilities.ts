@@ -223,6 +223,12 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     params: empty,
   },
   {
+    name: 'diag_activation',
+    summary: 'Diagnostic: per-gate tab-activation readiness timings (bridge/worker/page), cold/warm.',
+    category: 'read',
+    params: empty,
+  },
+  {
     name: 'capture_login_flow',
     summary: 'Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).',
     category: 'read',

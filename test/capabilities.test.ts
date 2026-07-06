@@ -31,6 +31,7 @@ const EXPECTED_TOOLS = [
   'read_network',
   'diag_suspension',
   'diag_bridges',
+  'diag_activation',
   'capture_login_flow',
   'wait_for_api_response',
   'file_upload',

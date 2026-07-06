@@ -10,7 +10,7 @@ export const PANEL_CSS = `
 * { box-sizing: border-box; }
 html,body { margin:0; height:100%; }
 body { background: var(--charcoal); color: var(--bright-white);
-  font: 13px/1.5 var(--font-mono); display:flex; flex-direction:column; }
+  font: 13px/1.5 var(--font-mono); display:flex; flex-direction:column; position:relative; }
 header { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--subtle-gray); }
 header .mark { color: var(--f5-red); font-weight:700; letter-spacing:.05em; }
 header .sub { color: var(--dim); }
@@ -50,4 +50,19 @@ form#composer { display:flex; gap:8px; padding:10px 12px; border-top:1px solid v
   color: var(--bright-white); border:1px solid var(--subtle-gray); border-radius:8px; padding:8px 10px; font:inherit; }
 #send, #stop { background: var(--f5-red); color:#fff; border:none; border-radius:8px; padding:0 14px; cursor:pointer; font:inherit; }
 #send:disabled { opacity:.5; cursor:default; }
+.activation-overlay { position:absolute; inset:0; z-index:5; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:10px; background: var(--charcoal); padding:24px; }
+.activation-overlay .ov-spinner { color: var(--f5-red); font-size:20px; }
+.activation-overlay .ov-title { color: var(--bright-white); font-size:13px; letter-spacing:.04em; }
+.activation-overlay .ov-gates { list-style:none; margin:8px 0 0; padding:0; width:100%; max-width:260px; }
+.activation-overlay .ov-gate { display:flex; align-items:center; gap:8px; padding:4px 0; color: var(--dim); }
+.activation-overlay .ov-gate .ov-ico { width:14px; text-align:center; }
+.activation-overlay .ov-gate .ov-label { flex:1; }
+.activation-overlay .ov-gate .ov-ms { color: var(--cool-gray); font-size:11px; white-space:nowrap; }
+.activation-overlay .ov-passed { color: var(--bright-white); }
+.activation-overlay .ov-passed .ov-ico { color: var(--signal-green); }
+.activation-overlay .ov-active { color: var(--bright-white); }
+.activation-overlay .ov-stalled, .activation-overlay .ov-stalled .ov-ico { color: var(--alert-red); }
+.activation-overlay .ov-retry { margin-top:10px; background: var(--f5-red); color:#fff; border:none;
+  border-radius:8px; padding:6px 16px; cursor:pointer; font:inherit; }
 `;

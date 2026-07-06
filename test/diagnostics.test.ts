@@ -5,6 +5,7 @@ import {
   gateBlockEvidence,
   maxGap,
   pushCapped,
+  summarizeActivations,
   summarizeSuspension,
   summarizeTurns,
 } from '../src/diagnostics';
@@ -211,5 +212,78 @@ describe('summarizeTurns (turn-lifecycle diagnostic)', () => {
     ]);
     expect(s.replied).toBe(2);
     expect(s.maxReplyMs).toBe(1200);
+  });
+});
+
+describe('summarizeActivations', () => {
+  const run = (runId: number, cold: boolean, rows: Array<[string, number, string, number?]>) =>
+    rows.map(([gate, ms, outcome, total]) => ({
+      t: 0,
+      event: 'activation',
+      runId,
+      gate,
+      ms,
+      cold,
+      outcome,
+      phase: total !== undefined ? 'ready' : 'readying',
+      ...(total !== undefined ? { total } : {}),
+    }));
+
+  it('groups activation events by run, most recent first, with per-gate ms + total', () => {
+    const events = [
+      ...run(1, true, [
+        ['bridge', 12, 'passed'],
+        ['worker', 492, 'passed'],
+        ['page', 138, 'passed', 642],
+      ]),
+      ...run(2, false, [
+        ['bridge', 3, 'passed'],
+        ['worker', 8, 'passed'],
+        ['page', 40, 'passed', 51],
+      ]),
+    ];
+    const runs = summarizeActivations(events);
+    expect(runs.map((r) => r.runId)).toEqual([2, 1]); // most recent first
+    expect(runs[1]).toEqual({
+      runId: 1,
+      cold: true,
+      total: 642,
+      phase: 'ready',
+      gates: [
+        { gate: 'bridge', ms: 12, outcome: 'passed' },
+        { gate: 'worker', ms: 492, outcome: 'passed' },
+        { gate: 'page', ms: 138, outcome: 'passed' },
+      ],
+    });
+  });
+
+  it('reports a stalled run with null total and its terminal phase', () => {
+    const events = [
+      { t: 0, event: 'activation', runId: 5, gate: 'bridge', ms: 4, cold: true, outcome: 'passed', phase: 'readying' },
+      {
+        t: 0,
+        event: 'activation',
+        runId: 5,
+        gate: 'worker',
+        ms: 15_000,
+        cold: true,
+        outcome: 'stalled',
+        phase: 'blocked',
+      },
+    ];
+    const [r] = summarizeActivations(events);
+    expect(r.total).toBeNull();
+    expect(r.phase).toBe('blocked');
+    expect(r.gates.at(-1)).toEqual({ gate: 'worker', ms: 15_000, outcome: 'stalled' });
+  });
+
+  it('ignores non-activation events and honours the limit', () => {
+    const events = [
+      { t: 0, event: 'keepalive' },
+      ...run(1, true, [['bridge', 1, 'passed']]),
+      ...run(2, true, [['bridge', 1, 'passed']]),
+      ...run(3, true, [['bridge', 1, 'passed']]),
+    ];
+    expect(summarizeActivations(events, 2).map((r) => r.runId)).toEqual([3, 2]);
   });
 });
