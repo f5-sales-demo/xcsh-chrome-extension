@@ -188,6 +188,21 @@ export function usePanel() {
     }
     const key = sessionKeyFromUrl(tab?.url);
     const keyStr = key ? sessionKeyStr(key) : null;
+    const phase = stateRef.current.activation.phase;
+    if (
+      keyStr &&
+      tab?.id === boundTabId.current &&
+      keyStr === boundSessionKey.current &&
+      (phase === 'ready' || phase === 'degraded')
+    ) {
+      // Same-tab, same-tenant navigation on an established session: refresh the page
+      // snapshot WITHOUT a reset so a turn navigating its own tab (#175) keeps its
+      // reply visible (no overlay flash) and its conversation intact (no
+      // switchToTenantSession clobber). Full reset is reserved for a real tab switch,
+      // a tenant change (#166 re-login → keyStr differs), cold start, and boot.
+      bus.post({ type: 'get_page_context', tabId: tab?.id }); // reqId-less → updates chip, never re-gates
+      return;
+    }
     if (keyStr && key) beginActivation(keyStr, key.tenant, key.env, tab?.id);
     else beginInactive();
   }
@@ -329,10 +344,13 @@ export function usePanel() {
     // Readiness gate: the composer is locked until the panel is usable. Surface the
     // reason per-send (parity with old side-panel.ts:612–627) rather than hang.
     if (inputLocked(s)) {
+      const p = s.activation.phase;
       return notify(
-        s.activation.phase === 'disconnected'
+        p === 'disconnected'
           ? 'xcsh not connected — start the xcsh CLI, then resend.'
-          : 'xcsh is starting for this tab — one moment, then resend.',
+          : p === 'blocked'
+            ? 'No xcsh running for this tab — start the xcsh CLI, then resend.'
+            : 'xcsh is starting for this tab — one moment, then resend.',
       );
     }
     const userMsgId = `u-${crypto.randomUUID()}`;

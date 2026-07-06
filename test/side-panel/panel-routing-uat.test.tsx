@@ -196,6 +196,38 @@ describe('panel routing UAT (#166)', () => {
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating to Health Checks.'));
   });
 
+  it('same-tab self-nav mid-turn does NOT reset the machine: no overlay flash, runId + streamed transcript intact (#175)', async () => {
+    // Root-cause guard for the overlay-flash regression: a same-tab, same-tenant
+    // self-navigation during an active turn must NOT re-gate. The old code did a full
+    // `reset` on every onUpdated(url), which bumped runId → phase 'readying' → overlay
+    // covered the streaming reply, and the page-gate side-effect reloaded the persisted
+    // conversation over the live one.
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    await driveToReady(h, [{ tenant: F5_KEY, env: 'production' }]);
+    expect(h.api().state.activation.phase).toBe('ready');
+    const runIdBefore = h.api().state.activation.runId;
+
+    h.api().sendMessage('navigate to health checks');
+    await waitFor(() => expect(h.api().state.active).toBeTruthy());
+    const turnId = lastOfType(h.posted, 'chat_request')?.id as string;
+
+    // Stream some text so the transcript has a visible partial reply.
+    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 0, delta: 'Navigating' });
+    await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
+
+    // The agent navigates THIS tab to another SAME-tenant page.
+    h.fireUpdated(7, 'https://f5-amer-ent.console.ves.volterra.io/web/other');
+
+    // Give the async gate a chance to run, then assert nothing reset/flashed.
+    await waitFor(() => expect(h.api().state.active?.id).toBe(turnId));
+    expect(overlayVisible(h.api().state)).toBe(false); // no "getting ready" over the stream
+    expect(h.api().state.activation.runId).toBe(runIdBefore); // no reset
+    // Conversation not clobbered by a switchToTenantSession reload.
+    const lastMsg = h.api().state.conv.messages.at(-1);
+    expect(lastMsg?.role).toBe('assistant');
+    expect(lastMsg?.text).toBe('Navigating');
+  });
+
   it('readiness: a connected tenant tab with no worker is readying (overlay up, "starting" placeholder), then ready once it binds + reads', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
     h.pushToPanel({ type: 'status', connected: true });
