@@ -15,8 +15,8 @@ import {
   portForTenant,
   stalePorts,
 } from './bridge-discovery';
+import { bridgeHello, dispatchBridgeFrame } from './bridge-transport';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
-import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import {
   type DiagEvent,
@@ -603,7 +603,7 @@ function connectPort(port: number): void {
       lastActivityTs = Date.now();
       recordDiag('ws_open', { port });
       try {
-        sock.send(JSON.stringify({ type: 'hello', contractVersion: CONTRACT_VERSION, extensionId: chrome.runtime.id }));
+        sock.send(JSON.stringify(bridgeHello(CONTRACT_VERSION, chrome.runtime.id)));
       } catch {
         /* socket may have dropped immediately */
       }
@@ -657,91 +657,88 @@ function sendTo(port: number | undefined, msg: unknown): boolean {
 
 // biome-ignore lint/suspicious/noExplicitAny: bridge message shape
 function onMessage(msg: any, sourcePort: number): void {
-  if (!msg || typeof msg !== 'object') return;
+  // Frame-type routing lives in bridge-transport (dispatchBridgeFrame), tested end
+  // to end over a real socket; the per-type effect handlers below stay here where
+  // the SW state lives.
+  dispatchBridgeFrame(msg, {
+    onPing: () => sendTo(sourcePort, { type: 'pong' }),
 
-  if (msg.type === 'ping') {
-    sendTo(sourcePort, { type: 'pong' });
-    return;
-  }
+    // Identity handshake reply — record which tenant this bridge (port) serves.
+    onIdentity: (frame) => {
+      const plan = planHelloAck(frame, CONTRACT_VERSION);
+      if (plan.kind === 'ignore') return; // not a real xcsh hello_ack (no string sessionId)
+      if (plan.kind === 'reject') {
+        // Major contract mismatch — close and forget this socket rather than trust it.
+        try {
+          sockets.get(sourcePort)?.close();
+        } catch {}
+        sockets.delete(sourcePort);
+        registry.delete(sourcePort);
+        knownPorts.delete(sourcePort); // incompatible bridge: don't fast-reconnect (avoids ~1.5s storm)
+        return;
+      }
+      const info: BridgeInfo = {
+        port: sourcePort,
+        tenant: plan.tenant,
+        env: plan.env,
+        sessionId: plan.sessionId,
+        contextBound: plan.contextBound,
+        lastSeen: Date.now(),
+      };
+      registry.set(sourcePort, info);
+      // Bind this worker socket to the tab its per-tab sid names (validated open),
+      // so tool_request from this port dispatches to that worker's OWN tab.
+      correlatePortToTab(sourcePort, info.sessionId);
+      knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
+      // Legacy single-session mirror (still used by the connection-dot tooltip).
+      sessionTenant = info.tenant;
+      sessionEnv = info.env;
+      sessionId = info.sessionId;
+      sessionContextBound = info.contextBound;
+      if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
+      broadcastToChatPanels({
+        type: 'session_info',
+        tenant: sessionTenant,
+        env: sessionEnv,
+        sessionId,
+        contextBound: sessionContextBound,
+      });
+      broadcastBridges();
+    },
 
-  // Identity handshake reply — record which tenant this bridge (port) serves.
-  if (msg.type === 'hello_ack' || msg.type === 'tenant_changed') {
-    const plan = planHelloAck(msg, CONTRACT_VERSION);
-    if (plan.kind === 'ignore') return; // not a real xcsh hello_ack (no string sessionId)
-    if (plan.kind === 'reject') {
-      // Major contract mismatch — close and forget this socket rather than trust it.
-      try {
-        sockets.get(sourcePort)?.close();
-      } catch {}
-      sockets.delete(sourcePort);
-      registry.delete(sourcePort);
-      knownPorts.delete(sourcePort); // incompatible bridge: don't fast-reconnect (avoids ~1.5s storm)
-      return;
-    }
-    const info: BridgeInfo = {
-      port: sourcePort,
-      tenant: plan.tenant,
-      env: plan.env,
-      sessionId: plan.sessionId,
-      contextBound: plan.contextBound,
-      lastSeen: Date.now(),
-    };
-    registry.set(sourcePort, info);
-    // Bind this worker socket to the tab its per-tab sid names (validated open),
-    // so tool_request from this port dispatches to that worker's OWN tab.
-    correlatePortToTab(sourcePort, info.sessionId);
-    knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
-    // Legacy single-session mirror (still used by the connection-dot tooltip).
-    sessionTenant = info.tenant;
-    sessionEnv = info.env;
-    sessionId = info.sessionId;
-    sessionContextBound = info.contextBound;
-    if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
-    broadcastToChatPanels({
-      type: 'session_info',
-      tenant: sessionTenant,
-      env: sessionEnv,
-      sessionId,
-      contextBound: sessionContextBound,
-    });
-    broadcastBridges();
-    return;
-  }
+    onToolRequest: (frame) => {
+      const { id, tool, params } = frame as { id: string; tool: string; params: unknown };
+      // Dispatch to the tab BOUND to this worker's socket — never the global
+      // targetTabId. An unbound source (no live hello_ack correlation) is refused,
+      // so a worker can only ever drive its own tab.
+      const plan = planToolRequest(sourcePort, portToTab);
+      if (plan.kind === 'refuse') {
+        sendTo(sourcePort, { type: 'tool_result', id, content: 'no bound tab for this session', is_error: true });
+        return;
+      }
+      Promise.resolve()
+        .then(() => runTool(tool, params, plan.tabId))
+        .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
+        .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
+    },
 
-  if (msg.type === 'tool_request') {
-    const { id, tool, params } = msg;
-    // Dispatch to the tab BOUND to this worker's socket — never the global
-    // targetTabId. An unbound source (no live hello_ack correlation) is refused,
-    // so a worker can only ever drive its own tab.
-    const plan = planToolRequest(sourcePort, portToTab);
-    if (plan.kind === 'refuse') {
-      sendTo(sourcePort, { type: 'tool_result', id, content: 'no bound tab for this session', is_error: true });
-      return;
-    }
-    Promise.resolve()
-      .then(() => runTool(tool, params, plan.tabId))
-      .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
-      .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
-    return;
-  }
-
-  if (isChatInbound(msg)) {
-    const port = turnToPort.get(msg.id);
-    port?.postMessage(msg);
-    // First inbound for this turn → record route→reply latency (#170), then forget
-    // the start time so later deltas don't re-record.
-    const routedAt = turnRoutedAt.get(msg.id);
-    if (routedAt !== undefined) {
-      recordDiag('chat_reply', { id: msg.id, ms: Date.now() - routedAt });
-      turnRoutedAt.delete(msg.id);
-    }
-    if (msg.type === 'chat_done' || msg.type === 'chat_error') {
-      turnToPort.delete(msg.id);
-      turnToBridgePort.delete(msg.id);
-      turnRoutedAt.delete(msg.id);
-    }
-    return;
-  }
+    onChatInbound: (frame) => {
+      const port = turnToPort.get(frame.id);
+      port?.postMessage(frame);
+      // First inbound for this turn → record route→reply latency (#170), then forget
+      // the start time so later deltas don't re-record.
+      const routedAt = turnRoutedAt.get(frame.id);
+      if (routedAt !== undefined) {
+        recordDiag('chat_reply', { id: frame.id, ms: Date.now() - routedAt });
+        turnRoutedAt.delete(frame.id);
+      }
+      if (frame.type === 'chat_done' || frame.type === 'chat_error') {
+        turnToPort.delete(frame.id);
+        turnToBridgePort.delete(frame.id);
+        turnRoutedAt.delete(frame.id);
+      }
+    },
+  });
 }
 
 // Keep the SW alive (so reconnection is always fast) and connect on startup.
