@@ -94,18 +94,20 @@ export function usePanel() {
 
   // Panel-owned activation gating (old gateToActiveTab, lines 364–423).
   async function gateToActiveTab(tabId?: number) {
-    // If a turn is running on another tab, save + suspend it rather than locking
-    // the panel (the old `if (active) return` caused cross-tab transcript bleed +
-    // blanking: tab B's commands went to tab A's worker because boundTabId never
-    // updated, and tab B's conversation was empty when you returned). The suspended
-    // turn's stream is safely ignored (the `active.id !== ev.id` guard drops it).
-    if (stateRef.current.active) {
-      await saveConversation(stateRef.current.conv);
-      dispatch({ type: 'suspend_turn' });
-    }
     let tab: chrome.tabs.Tab | undefined;
     if (tabId !== undefined) tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (!tab) tab = (await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []))[0];
+    // Suspend a running turn ONLY when moving to a DIFFERENT tab, not on a same-tab
+    // URL change. A turn's own automation (navigate/tool) changes its tab's URL,
+    // which fires onUpdated → here; suspending then would null `active` and the
+    // `active.id !== ev.id` guard would drop the turn's remaining stream, so the
+    // reply renders as a spinner with no text. On a real tab switch we still save +
+    // suspend (no cross-tab bleed: the suspended turn's events are dropped, and the
+    // partial content is preserved in storage for when you return).
+    if (stateRef.current.active && tab?.id !== boundTabId.current) {
+      await saveConversation(stateRef.current.conv);
+      dispatch({ type: 'suspend_turn' });
+    }
     const key = sessionKeyFromUrl(tab?.url);
     const keyStr = key ? sessionKeyStr(key) : null;
     if (keyStr && key) {

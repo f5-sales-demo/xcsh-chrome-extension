@@ -18,7 +18,14 @@ import {
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
 import { isChatInbound } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
-import { type DiagEvent, extractRedirects, gateBlockEvidence, pushCapped, summarizeSuspension } from './diagnostics';
+import {
+  type DiagEvent,
+  extractRedirects,
+  gateBlockEvidence,
+  pushCapped,
+  summarizeSuspension,
+  summarizeTurns,
+} from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
 import { planChatRequest, planHelloAck, planReTenant, planToolRequest } from './sw-router';
@@ -324,6 +331,10 @@ const turnToPort = new Map<string, chrome.runtime.Port>();
 // Which bridge port a turn was dispatched over (introduced fully in E4; declared
 // here so E2's onMessage delete path compiles).
 const turnToBridgePort = new Map<string, number>();
+// turnId → epoch ms it was routed, for the turn-lifecycle diagnostic (#170): the
+// first inbound reply records its latency; a routed turn with no reply surfaces as
+// `unanswered` in diag_suspension — the "accepted but stalled/dropped" signal.
+const turnRoutedAt = new Map<string, number>();
 
 // Connected chat side-panel Ports (for broadcasting tab/connection state).
 const chatPanels = new Set<chrome.runtime.Port>();
@@ -717,9 +728,17 @@ function onMessage(msg: any, sourcePort: number): void {
   if (isChatInbound(msg)) {
     const port = turnToPort.get(msg.id);
     port?.postMessage(msg);
+    // First inbound for this turn → record route→reply latency (#170), then forget
+    // the start time so later deltas don't re-record.
+    const routedAt = turnRoutedAt.get(msg.id);
+    if (routedAt !== undefined) {
+      recordDiag('chat_reply', { id: msg.id, ms: Date.now() - routedAt });
+      turnRoutedAt.delete(msg.id);
+    }
     if (msg.type === 'chat_done' || msg.type === 'chat_error') {
       turnToPort.delete(msg.id);
       turnToBridgePort.delete(msg.id);
+      turnRoutedAt.delete(msg.id);
     }
     return;
   }
@@ -877,12 +896,16 @@ chrome.runtime.onConnect.addListener((port) => {
       // the worker must advertise that exact key, so a turn after a same-tab re-login
       // can never resolve the OLD-tenant worker still lingering on this tab's sid (#166).
       const plan = planChatRequest(m, registry, (p) => sockets.get(p)?.readyState === WebSocket.OPEN);
+      const diagTab = typeof m.tabId === 'number' ? m.tabId : null;
       if (plan.kind === 'error') {
+        recordDiag('chat_route', { id: plan.id, tabId: diagTab, error: true });
         port.postMessage({ type: 'chat_error', id: plan.id, error: plan.error });
         return;
       }
       turnToPort.set(plan.id, port);
       turnToBridgePort.set(plan.id, plan.port); // pin this turn to its origin socket
+      turnRoutedAt.set(plan.id, Date.now());
+      recordDiag('chat_route', { id: plan.id, tabId: diagTab, port: plan.port });
       sendTo(plan.port, m);
       return;
     }
@@ -944,6 +967,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (p === port) {
         turnToPort.delete(id);
         turnToBridgePort.delete(id);
+        turnRoutedAt.delete(id);
       }
   });
   // Greet with current connection status so the panel can render its dot.
@@ -2725,8 +2749,12 @@ async function readNetwork(
 
 /** Read-only: the SW-lifecycle diagnostics buffer + a computed suspension summary
  * (restarts, suspends, max keepalive-tick gap = suspension window, missed binds). */
-async function diagSuspension(): Promise<{ summary: unknown; events: DiagEvent[] }> {
-  return { summary: summarizeSuspension(diagBuffer), events: diagBuffer.slice(-DIAG_CAP) };
+async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; events: DiagEvent[] }> {
+  return {
+    summary: summarizeSuspension(diagBuffer),
+    turns: summarizeTurns(diagBuffer),
+    events: diagBuffer.slice(-DIAG_CAP),
+  };
 }
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,

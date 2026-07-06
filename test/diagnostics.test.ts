@@ -6,6 +6,7 @@ import {
   maxGap,
   pushCapped,
   summarizeSuspension,
+  summarizeTurns,
 } from '../src/diagnostics';
 import { sessionKeyFromUrl } from '../src/tab-binding';
 
@@ -161,5 +162,54 @@ describe('gateBlockEvidence (RC-3)', () => {
       bridges: [b({ open: false })],
     });
     expect(e.keyLive).toBe(false);
+  });
+});
+
+// Turn-lifecycle diagnostic (#170 follow-up): make intermittent stalls observable.
+// The SW records `chat_route` (a turn resolved to a port, or errored with no
+// worker) and `chat_reply` (first-inbound latency). summarizeTurns pairs them by
+// id so a routed turn with NO reply surfaces as `unanswered` — the "accepted but
+// hangs, no error" case that gate_block never captured.
+describe('summarizeTurns (turn-lifecycle diagnostic)', () => {
+  const ev = (event: string, extra: Record<string, unknown>) => ({ t: 0, event, ...extra });
+
+  it('is all-zero for an empty buffer', () => {
+    expect(summarizeTurns([])).toEqual({ routed: 0, errored: 0, replied: 0, unanswered: [], maxReplyMs: 0 });
+  });
+
+  it('pairs a routed turn with its reply and records the latency', () => {
+    const s = summarizeTurns([
+      ev('chat_route', { id: 'c1', tabId: 7, port: 19222 }),
+      ev('chat_reply', { id: 'c1', ms: 850 }),
+    ]);
+    expect(s.routed).toBe(1);
+    expect(s.replied).toBe(1);
+    expect(s.unanswered).toEqual([]);
+    expect(s.maxReplyMs).toBe(850);
+  });
+
+  it('flags a routed turn with NO reply as unanswered (the stall signal)', () => {
+    const s = summarizeTurns([ev('chat_route', { id: 'c1', tabId: 7, port: 19222 })]);
+    expect(s.routed).toBe(1);
+    expect(s.replied).toBe(0);
+    expect(s.unanswered).toEqual(['c1']);
+  });
+
+  it('counts a no-worker route as errored, not routed', () => {
+    const s = summarizeTurns([ev('chat_route', { id: 'c1', tabId: 7, error: true })]);
+    expect(s.errored).toBe(1);
+    expect(s.routed).toBe(0);
+    expect(s.unanswered).toEqual([]);
+  });
+
+  it('reports the slowest first-reply latency across turns', () => {
+    const s = summarizeTurns([
+      ev('chat_route', { id: 'c1', port: 19222 }),
+      ev('chat_reply', { id: 'c1', ms: 300 }),
+      ev('chat_route', { id: 'c2', port: 19223 }),
+      ev('chat_reply', { id: 'c2', ms: 1200 }),
+    ]);
+    expect(s.replied).toBe(2);
+    expect(s.maxReplyMs).toBe(1200);
   });
 });
