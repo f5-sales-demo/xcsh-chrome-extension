@@ -26,6 +26,8 @@ export interface BridgeFrameHandlers {
   onIdentity?: (frame: Record<string, unknown>) => void;
   /** a worker `tool_request` to run against its bound tab. */
   onToolRequest?: (frame: Record<string, unknown>) => void;
+  /** an xcsh timing `span` (in-band telemetry) tagged with a correlation id. */
+  onSpan?: (frame: Record<string, unknown>) => void;
   /** a chat inbound frame (`chat_delta` / `chat_done` / `chat_error` / notice). */
   onChatInbound?: (frame: ChatInbound) => void;
 }
@@ -45,6 +47,9 @@ export function dispatchBridgeFrame(raw: unknown, handlers: BridgeFrameHandlers)
       return;
     case 'tool_request':
       handlers.onToolRequest?.(msg);
+      return;
+    case 'span':
+      handlers.onSpan?.(msg);
       return;
   }
   if (isChatInbound(msg as unknown as ChatInbound)) handlers.onChatInbound?.(msg as unknown as ChatInbound);
