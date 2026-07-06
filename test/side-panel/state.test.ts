@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'bun:test';
 import { newConversation, startAssistant } from '../../src/references-store';
-import { composerPlaceholder, contextChipText, initPanelState, panelReducer } from '../../src/side-panel/state';
+import { activationReducer, initActivation } from '../../src/side-panel/activation';
+import {
+  composerPlaceholder,
+  contextChipText,
+  initPanelState,
+  inputLocked,
+  overlayVisible,
+  panelReducer,
+} from '../../src/side-panel/state';
 
 const base = () => initPanelState(newConversation('c1', 0));
+
+const act = (over: Partial<{ connected: boolean; workerLive: boolean }> = {}) =>
+  activationReducer(
+    initActivation(),
+    { kind: 'reset', tenant: true, cold: true, connected: false, workerLive: false, ...over },
+    0,
+  );
 
 describe('provisioning indicator (#180)', () => {
   it('composerPlaceholder shows "starting xcsh…" while provisioning, else the default', () => {
@@ -60,5 +75,57 @@ describe('panelReducer', () => {
     expect(contextChipText(s)).toBe('Load Balancers');
     s = panelReducer(s, { type: 'set_inactive', label: '' });
     expect(contextChipText(s)).toBe('open an F5 XC console page');
+  });
+});
+
+describe('activation in panel state', () => {
+  it('initPanelState seeds an inactive activation', () => {
+    expect(base().activation.phase).toBe('inactive');
+  });
+
+  it('set_activation stores the sub-state; set_session_label sets the label', () => {
+    const a = act({ connected: true }); // readying (worker active)
+    const s = panelReducer(base(), { type: 'set_activation', activation: a });
+    expect(s.activation.phase).toBe('readying');
+    expect(panelReducer(s, { type: 'set_session_label', label: 'acme·staging' }).sessionLabel).toBe('acme·staging');
+  });
+
+  it('overlayVisible is true only while readying or blocked', () => {
+    const readying = { ...base(), activation: act({ connected: true }) };
+    const blocked = {
+      ...base(),
+      activation: activationReducer(act({ connected: true }), { kind: 'timeout', gate: 'worker' }, 15_100),
+    };
+    const ready = {
+      ...base(),
+      activation: activationReducer(act({ connected: true, workerLive: true }), { kind: 'page' }, 50),
+    };
+    expect(overlayVisible(readying)).toBe(true);
+    expect(overlayVisible(blocked)).toBe(true);
+    expect(overlayVisible(ready)).toBe(false);
+    expect(overlayVisible(base())).toBe(false); // inactive
+  });
+
+  it('inputLocked covers readying/blocked/disconnected but not ready/degraded/inactive', () => {
+    const disconnected = {
+      ...base(),
+      activation: activationReducer(act(), { kind: 'timeout', gate: 'bridge' }, 10_100),
+    };
+    const degraded = {
+      ...base(),
+      activation: activationReducer(
+        act({ connected: true, workerLive: true }),
+        { kind: 'timeout', gate: 'page' },
+        5_100,
+      ),
+    };
+    const ready = {
+      ...base(),
+      activation: activationReducer(act({ connected: true, workerLive: true }), { kind: 'page' }, 50),
+    };
+    expect(inputLocked(disconnected)).toBe(true);
+    expect(inputLocked(degraded)).toBe(false);
+    expect(inputLocked(ready)).toBe(false);
+    expect(inputLocked(base())).toBe(false); // inactive
   });
 });

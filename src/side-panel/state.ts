@@ -1,5 +1,6 @@
 import { type ChatStreamMsg, type ChatTurnState, initChatTurn, reduceChatTurn } from '../chat-protocol';
 import { appendAssistantDelta, type Conversation, finalizeAssistant, markAborted } from '../references-store';
+import { type ActivationState, initActivation } from './activation';
 
 export interface PanelState {
   conv: Conversation;
@@ -12,6 +13,8 @@ export interface PanelState {
   /** The focused tab's worker is being provisioned (spawn→bind window): show a
    *  transient "starting xcsh…" instead of the actionable "no xcsh" block (#180). */
   provisioning: boolean;
+  /** Tab-activation readiness gate state (bridge/worker/page) + derived phase. */
+  activation: ActivationState;
   active: { id: string; msgId: string; state: ChatTurnState } | null;
 }
 
@@ -25,6 +28,7 @@ export function initPanelState(conv: Conversation): PanelState {
     contextMeta: null,
     sessionLabel: '',
     provisioning: false,
+    activation: initActivation(),
     active: null,
   };
 }
@@ -36,6 +40,8 @@ export type PanelAction =
   | { type: 'set_active_tenant'; label: string }
   | { type: 'input_blocked'; blocked: boolean }
   | { type: 'set_provisioning'; on: boolean }
+  | { type: 'set_activation'; activation: ActivationState }
+  | { type: 'set_session_label'; label: string }
   | { type: 'toggle_context' }
   | { type: 'page_context'; meta: { title?: string; path?: string } | null; snapshot: unknown }
   | { type: 'begin_turn'; id: string; msgId: string }
@@ -59,6 +65,10 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
       return { ...s, inputBlocked: a.blocked };
     case 'set_provisioning':
       return { ...s, provisioning: a.on };
+    case 'set_activation':
+      return { ...s, activation: a.activation };
+    case 'set_session_label':
+      return { ...s, sessionLabel: a.label };
     case 'toggle_context':
       return { ...s, attachContext: !s.attachContext };
     case 'page_context':
@@ -127,4 +137,19 @@ export function contextChipText(s: PanelState): string {
     return s.contextMeta.title ?? s.contextMeta.path ?? 'current page';
   }
   return s.attachContext ? 'no page attached' : 'context off';
+}
+
+/** The "getting ready" overlay covers the panel (transcript hidden) while a
+ *  hard gate is pending or has stalled. */
+export function overlayVisible(s: Pick<PanelState, 'activation'>): boolean {
+  const p = s.activation.phase;
+  return p === 'readying' || p === 'blocked';
+}
+
+/** Composer is locked until the panel is usable — readying (gates in flight),
+ *  blocked (worker stalled), or disconnected (bridge stalled). `ready` and the
+ *  soft `degraded` phase both allow input; `inactive` (non-tenant tab) is unchanged. */
+export function inputLocked(s: Pick<PanelState, 'activation'>): boolean {
+  const p = s.activation.phase;
+  return p === 'readying' || p === 'blocked' || p === 'disconnected';
 }
