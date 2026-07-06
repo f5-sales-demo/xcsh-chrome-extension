@@ -9,6 +9,9 @@ export interface PanelState {
   inputBlocked: boolean;
   contextMeta: { title?: string; path?: string } | null;
   sessionLabel: string;
+  /** The focused tab's worker is being provisioned (spawn→bind window): show a
+   *  transient "starting xcsh…" instead of the actionable "no xcsh" block (#180). */
+  provisioning: boolean;
   active: { id: string; msgId: string; state: ChatTurnState } | null;
 }
 
@@ -21,6 +24,7 @@ export function initPanelState(conv: Conversation): PanelState {
     inputBlocked: false,
     contextMeta: null,
     sessionLabel: '',
+    provisioning: false,
     active: null,
   };
 }
@@ -31,6 +35,7 @@ export type PanelAction =
   | { type: 'set_inactive'; label: string }
   | { type: 'set_active_tenant'; label: string }
   | { type: 'input_blocked'; blocked: boolean }
+  | { type: 'set_provisioning'; on: boolean }
   | { type: 'toggle_context' }
   | { type: 'page_context'; meta: { title?: string; path?: string } | null; snapshot: unknown }
   | { type: 'begin_turn'; id: string; msgId: string }
@@ -48,9 +53,12 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
     case 'set_inactive':
       return { ...s, panelInactive: true, sessionLabel: a.label };
     case 'set_active_tenant':
-      return { ...s, panelInactive: false, sessionLabel: a.label };
+      // Worker is live for this tab → clear any pending provisioning indicator.
+      return { ...s, panelInactive: false, sessionLabel: a.label, provisioning: false };
     case 'input_blocked':
       return { ...s, inputBlocked: a.blocked };
+    case 'set_provisioning':
+      return { ...s, provisioning: a.on };
     case 'toggle_context':
       return { ...s, attachContext: !s.attachContext };
     case 'page_context':
@@ -104,6 +112,12 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
     default:
       return s;
   }
+}
+
+/** Composer placeholder: surface the provision→bind window as "starting xcsh…"
+ *  so first-focus latency reads as progress, not a hang (#180). */
+export function composerPlaceholder(s: Pick<PanelState, 'provisioning'>): string {
+  return s.provisioning ? 'starting xcsh for this tab…' : 'ask xcsh about this page…';
 }
 
 /** Mirrors the old renderContextChip() text rules. */

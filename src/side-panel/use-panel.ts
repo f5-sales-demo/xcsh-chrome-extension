@@ -30,9 +30,12 @@ import {
 import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
 import { sessionKeyFromUrl, sessionKeyStr } from '../tab-binding';
 import { PortBus } from '../ui/bus';
-import { contextChipText, initPanelState, panelReducer } from './state';
+import { composerPlaceholder, contextChipText, initPanelState, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
+// How long to show "starting xcsh…" for a freshly-focused tab before reverting to
+// the actionable "no xcsh" message — so a stuck/absent worker is not masked (#180).
+const PROVISION_TIMEOUT_MS = 15_000;
 const now = () => Date.now();
 
 export function usePanel() {
@@ -49,7 +52,27 @@ export function usePanel() {
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
   const turnTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const provisionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Show "starting xcsh…" while a focused tenant tab's worker is being provisioned,
+  // reverting after a timeout so a stuck/absent worker falls back to the actionable
+  // message rather than spinning forever (#180).
+  function beginProvisioning() {
+    if (stateRef.current.provisioning) return; // already showing; don't push the timer out
+    dispatch({ type: 'set_provisioning', on: true });
+    provisionTimeout.current = setTimeout(() => {
+      provisionTimeout.current = null;
+      dispatch({ type: 'set_provisioning', on: false });
+    }, PROVISION_TIMEOUT_MS);
+  }
+  function clearProvisioning() {
+    if (provisionTimeout.current) {
+      clearTimeout(provisionTimeout.current);
+      provisionTimeout.current = null;
+    }
+    if (stateRef.current.provisioning) dispatch({ type: 'set_provisioning', on: false });
+  }
 
   // Debounced 300ms save (old scheduleSave, lines 104–110).
   function scheduleSave() {
@@ -119,11 +142,18 @@ export function usePanel() {
         dispatch({ type: 'set_inactive', label: `${key.tenant}·${key.env}` });
         dispatch({ type: 'input_blocked', blocked: true });
         dispatch({ type: 'set_conv', conv: newConversation(`conv-${crypto.randomUUID()}`, now()) });
+        // No worker yet, but the bridge host IS connected → the SW is spawning one
+        // for this tab; show a transient "starting xcsh…" (beginProvisioning) instead
+        // of the actionable block. Not connected → a real connection problem, so
+        // clear provisioning and let the actionable message stand (#180).
+        if (stateRef.current.connected) beginProvisioning();
+        else clearProvisioning();
         // RC-3 evidence (#166): record WHY a connected tab blocked, so the live
         // registry state (not a guess) names the cause. See diag_suspension.
         bus.post({ type: 'gate_blocked', tabId: tab?.id, key: keyStr });
         return;
       }
+      clearProvisioning(); // worker is live for this tab
       dispatch({ type: 'input_blocked', blocked: false });
       const prev = boundTabId.current;
       boundTabId.current = tab?.id;
@@ -135,6 +165,7 @@ export function usePanel() {
       bus.post({ type: 'get_page_context', tabId: tab?.id });
     } else {
       // Active tab is NOT a tenant — enforce inactive every time (old:410–421).
+      clearProvisioning(); // not a tenant tab → nothing is starting
       boundTabId.current = undefined;
       boundSessionKey.current = null;
       dispatch({ type: 'set_inactive', label: '' });
@@ -269,8 +300,13 @@ export function usePanel() {
     };
     // No live xcsh worker for the active tenant (the gate blocked input) — surface it
     // per-send instead of swallowing the send (parity with old side-panel.ts:612–615).
+    // While a worker is provisioning, say so rather than tell the user to start the CLI (#180).
     if (s.inputBlocked)
-      return notify('No xcsh running for this tenant — start the xcsh CLI in that context, then resend.');
+      return notify(
+        s.provisioning
+          ? 'xcsh is starting for this tab — one moment, then resend.'
+          : 'No xcsh running for this tenant — start the xcsh CLI in that context, then resend.',
+      );
     // Disconnected fast-path (old side-panel.ts:619–627) — avoid the 30s hang.
     if (!s.connected) return notify('xcsh not connected — start the xcsh CLI, then resend.');
     const userMsgId = `u-${crypto.randomUUID()}`;
@@ -338,6 +374,7 @@ export function usePanel() {
   return {
     state,
     contextLabel: contextChipText(state),
+    placeholder: composerPlaceholder(state),
     sendMessage,
     stop,
     setMode,
