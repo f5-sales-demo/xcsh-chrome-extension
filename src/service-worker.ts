@@ -28,7 +28,7 @@ import {
 } from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
-import { planChatRequest, planHelloAck, planReTenant, planToolRequest } from './sw-router';
+import { planChatRequest, planHelloAck, planReprovision, planReTenant, planToolRequest } from './sw-router';
 import {
   type BindingState,
   decideBinding,
@@ -206,14 +206,25 @@ function ensureNativeHost(): chrome.runtime.Port | null {
 }
 function nmSend(msg: unknown): boolean {
   const p = ensureNativeHost();
+  let ok = false;
   try {
     p?.postMessage(msg);
-    return !!p;
+    ok = !!p;
   } catch {
     nmPort = null;
-    return false;
+    ok = false;
   }
+  // Record every provision/release attempt + whether the host was reachable, so
+  // adoption failures are diagnosable (distinguishes "not sent" from "manager
+  // didn't adopt"). See diag_suspension. (#182)
+  const kind = msg && typeof msg === 'object' ? (msg as { type?: unknown }).type : undefined;
+  recordDiag('nm_send', { kind: typeof kind === 'string' ? kind : '?', ok });
+  return ok;
 }
+
+// Per-sid throttle for gate-block-driven re-provisioning (#182).
+const REPROVISION_MIN_INTERVAL_MS = 5_000;
+const reprovisionAt = new Map<string, number>();
 
 // tabId → sessionKeyStr for open tenant tabs. `onRemoved` carries no URL, so we
 // record each tab's tenant key as it is computed in onActivated/onUpdated and
@@ -620,7 +631,10 @@ function connectPort(port: number): void {
       if (sockets.get(port) === sock) sockets.delete(port);
       registry.delete(port);
       portToTab.delete(port); // this worker's tab binding dies with its socket
-      recordDiag('ws_close', { port });
+      // Only log a real bridge that dropped — NOT dead-port scan refusals (never
+      // opened). The 30s full-range scan probes ~14 empty ports every cycle; logging
+      // each close saturated the diag ring buffer and evicted the useful events (#182).
+      if (opened) recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
       if (!anyOpen()) failActiveTurns('bridge disconnected');
       broadcastBridges();
@@ -955,6 +969,26 @@ chrome.runtime.onConnect.addListener((port) => {
         bridges,
       });
       recordDiag('gate_block', { diagnosis: evidence.diagnosis, evidence });
+      // Recovery (#182): the panel is blocked because this tab has no worker. If a
+      // worker died mid-session, nothing else re-provisions it (setActiveTenant only
+      // fires on activation/navigation), so drive a rate-limited provision here. The
+      // block signal becomes actionable, not just telemetry.
+      const rsid = typeof m.tabId === 'number' ? sidForTab(m.tabId) : null;
+      const rkey = typeof m.key === 'string' ? m.key : null;
+      if (rsid && rkey) {
+        const plan = planReprovision({
+          hasWorker: portForTab(registry, rsid) !== undefined,
+          manualPinned: manualPortPinned,
+          connected: anyOpen(),
+          lastAt: reprovisionAt.get(rsid),
+          now: Date.now(),
+          minIntervalMs: REPROVISION_MIN_INTERVAL_MS,
+        });
+        if (plan.kind === 'reprovision') {
+          reprovisionAt.set(rsid, Date.now());
+          nmSend({ type: 'provision', sessionId: rsid, tenant: rkey });
+        }
+      }
       return;
     }
   });
