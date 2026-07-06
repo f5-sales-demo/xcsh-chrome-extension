@@ -386,13 +386,37 @@ describe('summarizeTtft', () => {
       ])!.turnId,
     ).toBe('c-2');
   });
+
+  it('never yields an empty timeline: an envelope with both children present drops to the children (non-null)', () => {
+    // The nearest reachable state to the (removed) `stages.length === 0` guard:
+    // only route_first_token + its full decomposition, no other spans. Dropping the
+    // envelope still leaves the two children, so the result is never null.
+    const t = summarizeTtft([
+      span('chat_handler', 12, { id: 'c-7', proc: 'xcsh' }),
+      span('provider_ttft', 300, { id: 'c-7', proc: 'xcsh' }),
+      span('route_first_token', 320, { id: 'c-7' }),
+    ])!;
+    expect(t.stages.map((s) => s.stage)).toEqual(['chat_handler', 'provider_ttft']);
+    expect(t.total).toBe(312);
+  });
+
+  it('treats a span with no ms as 0 (the ?: 0 fallback)', () => {
+    const t = summarizeTtft([
+      { t: 0, event: 'span', proc: 'ext', stage: 'send_to_route', id: 'c-8', sid: 'tab-1' },
+      { t: 0, event: 'span', proc: 'ext', stage: 'route_first_token', id: 'c-8' },
+    ])!;
+    expect(t.stages.map((s) => s.ms)).toEqual([0, 0]);
+    expect(t.total).toBe(0);
+  });
 });
 
 describe('isNoiseKind', () => {
-  it('classifies keepalive/suspend as noise, telemetry as signal', () => {
+  it('classifies only keepalive as high-frequency noise; suspend markers are signal', () => {
     expect(isNoiseKind('keepalive')).toBe(true);
-    expect(isNoiseKind('suspend')).toBe(true);
-    expect(isNoiseKind('suspend_canceled')).toBe(true);
+    // suspend / suspend_canceled are low-frequency signals (summarizeSuspension counts
+    // them, they bound the suspension window) — a keepalive flood must not evict them.
+    expect(isNoiseKind('suspend')).toBe(false);
+    expect(isNoiseKind('suspend_canceled')).toBe(false);
     expect(isNoiseKind('span')).toBe(false);
     expect(isNoiseKind('activation')).toBe(false);
     expect(isNoiseKind('chat_reply')).toBe(false);
