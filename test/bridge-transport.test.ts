@@ -52,6 +52,14 @@ describe('dispatchBridgeFrame', () => {
     dispatchBridgeFrame({ type: 'chat_done', id: 'c-1' }, h);
     expect(h.calls.map((c) => c[0])).toEqual(['chat', 'chat']);
   });
+  it('routes a span frame to onSpan and nothing else', () => {
+    const got: unknown[] = [];
+    dispatchBridgeFrame(
+      { type: 'span', stage: 'chat_handler', proc: 'xcsh', ms: 12, id: 'c-1' },
+      { onSpan: (f) => got.push(f), onChatInbound: () => got.push('CHAT') },
+    );
+    expect(got).toEqual([{ type: 'span', stage: 'chat_handler', proc: 'xcsh', ms: 12, id: 'c-1' }]);
+  });
   it('ignores unknown and non-object frames', () => {
     const h = spy();
     dispatchBridgeFrame({ type: 'wat' }, h);

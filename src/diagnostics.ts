@@ -241,3 +241,91 @@ export function summarizeActivations(events: DiagEvent[], limit = 10): Activatio
   }
   return [...byRun.values()].sort((a, b) => b.runId - a.runId).slice(0, limit);
 }
+
+/** High-frequency lifecycle ticks kept in a separate small ring so they don't
+ *  evict signal telemetry (spans, activation, chat_*) from the main buffer. */
+export function isNoiseKind(event: string): boolean {
+  return event === 'keepalive' || event === 'suspend' || event === 'suspend_canceled';
+}
+
+export interface TtftStage {
+  stage: string;
+  proc: 'ext' | 'xcsh';
+  ms: number;
+}
+export interface TtftTimeline {
+  turnId: string | null;
+  sid: string | null;
+  cold: boolean;
+  stages: TtftStage[];
+  total: number;
+  dominant: string | null;
+}
+
+/** Canonical init→first-token pipeline order. xcsh stages (Phase 2) interleave
+ *  with the extension's; unknown stages sort to the end, stably. */
+const TTFT_STAGE_ORDER = [
+  'sw_to_ws',
+  'manager_provision',
+  'worker_boot',
+  'provision_to_worker',
+  'gates',
+  'send_to_route',
+  'chat_handler',
+  'provider_ttft',
+  'route_first_token',
+];
+
+/** Envelope stage → the finer child stages it decomposes into. `route_first_token`
+ *  is the extension's envelope for the xcsh chat segment; `chat_handler` and
+ *  `provider_ttft` are its children (a decomposition, not siblings). When the
+ *  children are present the envelope must not be summed alongside them. */
+const TTFT_ENVELOPES: Record<string, string[]> = {
+  route_first_token: ['chat_handler', 'provider_ttft'],
+};
+
+type SpanEvt = DiagEvent & { stage: string; proc: string; ms: number; id?: string; sid?: string; cold?: boolean };
+
+/** Join all `span` events into one ordered init→first-token timeline for the most
+ *  recent turn: chat-segment spans (same turn id `c-…`) plus cold-start-segment
+ *  spans (same session id `tab-<id>`), linked by the `send_to_route` span that
+ *  carries BOTH. Pure — the SW stamps the spans; this only reads. */
+export function summarizeTtft(events: DiagEvent[]): TtftTimeline | null {
+  const spans = events.filter((e) => e.event === 'span') as SpanEvt[];
+  const withId = spans.filter((s) => typeof s.id === 'string');
+  if (withId.length === 0) return null;
+  const turnId = withId[withId.length - 1].id as string;
+  const link = [...spans].reverse().find((s) => s.id === turnId && typeof s.sid === 'string');
+  const sid = link?.sid ?? null;
+  const cold = link?.cold === true;
+  // Attach cold-start (per-sid) spans only when the linked turn is itself cold:
+  // provision_to_worker / gates / sw_to_ws belong to the turn that established the
+  // session, not to a later warm turn that happens to share the same sid.
+  const picked = spans.filter((s) => s.id === turnId || (cold && sid !== null && s.sid === sid));
+  const byStage = new Map<string, TtftStage>();
+  for (const s of picked) {
+    byStage.set(s.stage, {
+      stage: s.stage,
+      proc: s.proc === 'xcsh' ? 'xcsh' : 'ext',
+      ms: typeof s.ms === 'number' ? s.ms : 0,
+    });
+  }
+  const rank = (st: string) => {
+    const i = TTFT_STAGE_ORDER.indexOf(st);
+    return i === -1 ? TTFT_STAGE_ORDER.length : i;
+  };
+  const ordered = [...byStage.values()].sort((a, b) => rank(a.stage) - rank(b.stage));
+  // Drop any envelope stage whose child stages are present in the same timeline,
+  // so a decomposed envelope (Phase 2) is neither summed nor picked as dominant
+  // alongside its children; when the children are absent (Phase 1) the envelope
+  // stays as a normal leaf. See TTFT_ENVELOPES.
+  const present = new Set(ordered.map((s) => s.stage));
+  const stages = ordered.filter((s) => {
+    const kids = TTFT_ENVELOPES[s.stage];
+    return !kids || !kids.every((k) => present.has(k));
+  });
+  if (stages.length === 0) return null;
+  const total = stages.reduce((n, s) => n + s.ms, 0);
+  const dominant = stages.reduce((m, s) => (s.ms > m.ms ? s : m)).stage;
+  return { turnId, sid, cold, stages, total, dominant };
+}

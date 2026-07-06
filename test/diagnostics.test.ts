@@ -3,10 +3,12 @@ import {
   type BridgeSnap,
   extractRedirects,
   gateBlockEvidence,
+  isNoiseKind,
   maxGap,
   pushCapped,
   summarizeActivations,
   summarizeSuspension,
+  summarizeTtft,
   summarizeTurns,
 } from '../src/diagnostics';
 import { sessionKeyFromUrl } from '../src/tab-binding';
@@ -285,5 +287,114 @@ describe('summarizeActivations', () => {
       ...run(3, true, [['bridge', 1, 'passed']]),
     ];
     expect(summarizeActivations(events, 2).map((r) => r.runId)).toEqual([3, 2]);
+  });
+});
+
+describe('summarizeTtft', () => {
+  const span = (stage: string, ms: number, over: Record<string, unknown> = {}) =>
+    ({ t: 0, event: 'span', proc: 'ext', stage, ms, ...over }) as const;
+
+  it('returns null with no spans, or when no span carries a turn id', () => {
+    expect(summarizeTtft([{ t: 0, event: 'keepalive' }])).toBeNull();
+    expect(summarizeTtft([span('gates', 40, { sid: 'tab-7' })])).toBeNull();
+  });
+
+  it('joins a turn to its session cold-start via the send_to_route link, ordered canonically', () => {
+    const t = summarizeTtft([
+      span('sw_to_ws', 30, { sid: 'tab-7' }),
+      span('provision_to_worker', 500, { sid: 'tab-7', cold: true }),
+      span('gates', 40, { sid: 'tab-7' }),
+      span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
+      span('route_first_token', 380, { id: 'c-1' }),
+    ])!;
+    expect([t.turnId, t.sid, t.cold]).toEqual(['c-1', 'tab-7', true]);
+    expect(t.stages.map((s) => s.stage)).toEqual([
+      'sw_to_ws',
+      'provision_to_worker',
+      'gates',
+      'send_to_route',
+      'route_first_token',
+    ]);
+    expect(t.total).toBe(953);
+    expect(t.dominant).toBe('provision_to_worker');
+  });
+
+  it('interleaves xcsh spans and drops the route_first_token envelope when its children are present', () => {
+    const t = summarizeTtft([
+      span('send_to_route', 2, { id: 'c-9', sid: 'tab-3', cold: false }),
+      span('chat_handler', 12, { id: 'c-9', proc: 'xcsh' }),
+      span('provider_ttft', 300, { id: 'c-9', proc: 'xcsh' }),
+      span('route_first_token', 320, { id: 'c-9' }),
+    ])!;
+    expect(t.stages.map((s) => `${s.proc}:${s.stage}`)).toEqual([
+      'ext:send_to_route',
+      'xcsh:chat_handler',
+      'xcsh:provider_ttft',
+    ]);
+    expect(t.total).toBe(314);
+    expect(t.dominant).toBe('provider_ttft');
+    expect(t.cold).toBe(false);
+  });
+
+  it('keeps the envelope when its decomposition is only partial (one child missing)', () => {
+    const t = summarizeTtft([
+      span('send_to_route', 2, { id: 'c-4', sid: 'tab-8', cold: false }),
+      span('chat_handler', 12, { id: 'c-4', proc: 'xcsh' }),
+      span('route_first_token', 320, { id: 'c-4' }),
+    ])!;
+    // provider_ttft is absent, so route_first_token still captures its latency and is kept.
+    expect(t.stages.map((s) => s.stage)).toEqual(['send_to_route', 'chat_handler', 'route_first_token']);
+    expect(t.total).toBe(334);
+    expect(t.dominant).toBe('route_first_token');
+  });
+
+  it('keeps route_first_token as a leaf in Phase 1 when its xcsh children are absent', () => {
+    const t = summarizeTtft([
+      span('send_to_route', 2, { id: 'c-5', sid: 'tab-2' }),
+      span('route_first_token', 410, { id: 'c-5' }),
+    ])!;
+    expect(t.stages.map((s) => s.stage)).toEqual(['send_to_route', 'route_first_token']);
+    expect(t.total).toBe(412);
+    expect(t.dominant).toBe('route_first_token');
+  });
+
+  it('does not attach a session cold-start to a later WARM turn sharing the same sid', () => {
+    const t = summarizeTtft([
+      // cold turn c-1 established session tab-7 (its send_to_route is cold)
+      span('provision_to_worker', 500, { sid: 'tab-7', cold: true }),
+      span('gates', 40, { sid: 'tab-7' }),
+      span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
+      span('route_first_token', 380, { id: 'c-1' }),
+      // later warm turn c-2 reuses the same session tab-7
+      span('send_to_route', 2, { id: 'c-2', sid: 'tab-7', cold: false }),
+      span('route_first_token', 120, { id: 'c-2' }),
+    ])!;
+    expect(t.turnId).toBe('c-2');
+    expect(t.cold).toBe(false);
+    // warm turn must NOT inherit tab-7's cold-start spans (provision_to_worker/gates)
+    expect(t.stages.map((s) => s.stage)).toEqual(['send_to_route', 'route_first_token']);
+    expect(t.total).toBe(122);
+  });
+
+  it('picks the most recent turn when several are present', () => {
+    expect(
+      summarizeTtft([
+        span('send_to_route', 1, { id: 'c-1', sid: 'tab-1' }),
+        span('route_first_token', 100, { id: 'c-1' }),
+        span('send_to_route', 1, { id: 'c-2', sid: 'tab-2' }),
+        span('route_first_token', 200, { id: 'c-2' }),
+      ])!.turnId,
+    ).toBe('c-2');
+  });
+});
+
+describe('isNoiseKind', () => {
+  it('classifies keepalive/suspend as noise, telemetry as signal', () => {
+    expect(isNoiseKind('keepalive')).toBe(true);
+    expect(isNoiseKind('suspend')).toBe(true);
+    expect(isNoiseKind('suspend_canceled')).toBe(true);
+    expect(isNoiseKind('span')).toBe(false);
+    expect(isNoiseKind('activation')).toBe(false);
+    expect(isNoiseKind('chat_reply')).toBe(false);
   });
 });

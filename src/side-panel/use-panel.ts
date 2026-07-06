@@ -121,7 +121,8 @@ export function usePanel() {
     const t = now();
     const prev = stateRef.current.activation;
     const next = activationReducer(prev, event, t);
-    for (const rec of newlyResolvedGates(prev, next)) bus.post({ type: 'activation_timing', ...rec });
+    for (const rec of newlyResolvedGates(prev, next))
+      bus.post({ type: 'activation_timing', ...rec, tabId: boundTabId.current }); // tabId → SW keys the `gates` TTFT span to this tab's sid (#170)
     dispatch({ type: 'set_activation', activation: next });
     afterActivation(next);
   }
