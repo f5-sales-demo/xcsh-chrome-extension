@@ -6,6 +6,7 @@
   "scripts": {
     "build": "bun build.ts",
     "build:dev": "bun build.ts && node scripts/inject-key.mjs",
+    "watch:dev": "node scripts/dev-watch.mjs",
     "test": "bun test",
     "check:types": "tsc --noEmit"
   },
