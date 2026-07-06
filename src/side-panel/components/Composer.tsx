@@ -2,11 +2,13 @@ import { useRef } from 'preact/hooks';
 
 export function Composer({
   disabled,
+  placeholder = 'ask xcsh about this page…',
   sending,
   onSend,
   onStop,
 }: {
   disabled: boolean;
+  placeholder?: string;
   sending: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -41,7 +43,7 @@ export function Composer({
       <textarea
         id="input"
         ref={ref}
-        placeholder="ask xcsh about this page…"
+        placeholder={placeholder}
         rows={1}
         onInput={autosize}
         onKeyDown={(e) => {
