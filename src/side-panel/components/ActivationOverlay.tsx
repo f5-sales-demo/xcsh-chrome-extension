@@ -19,8 +19,8 @@ function gateLabel(gate: GateName, status: string): string {
 
 /** Full-panel "getting ready" overlay: a live gate checklist with per-gate ms.
  *  Pure display driven by ActivationState; the active gate's elapsed time counts
- *  up via a 100ms re-render tick. A hard worker stall (phase 'blocked') exposes
- *  Retry. */
+ *  up via a 100ms re-render tick. A hard stall — worker (phase 'blocked') or
+ *  bridge (phase 'disconnected') — exposes Retry. */
 export function ActivationOverlay({ activation, onRetry }: { activation: ActivationState; onRetry: () => void }) {
   const [, force] = useState(0);
   useEffect(() => {
@@ -54,7 +54,7 @@ export function ActivationOverlay({ activation, onRetry }: { activation: Activat
           );
         })}
       </ul>
-      {activation.phase === 'blocked' ? (
+      {activation.phase === 'blocked' || activation.phase === 'disconnected' ? (
         <button type="button" class="ov-retry" onClick={onRetry}>
           Retry
         </button>

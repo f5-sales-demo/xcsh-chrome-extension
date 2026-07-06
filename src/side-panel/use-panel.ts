@@ -216,8 +216,12 @@ export function usePanel() {
         const on = !!msg.connected;
         connectedRef.current = on;
         dispatch({ type: 'connected', on });
-        // Advance the bridge gate for the current run if it is waiting.
-        if (on && stateRef.current.activation.gates.bridge.status === 'active') fireActivation({ kind: 'bridge' });
+        const a = stateRef.current.activation;
+        // Advance the bridge gate for the current run if it is waiting; or, if the
+        // bridge already hard-stalled (disconnected), a fresh connection means xcsh
+        // finally started → re-gate the tab so the whole sequence restarts.
+        if (on && a.gates.bridge.status === 'active') fireActivation({ kind: 'bridge' });
+        else if (on && a.phase === 'disconnected') void gateToActiveTab(boundTabId.current);
         return;
       }
       if (msg.type === 'bridges') {
@@ -408,7 +412,11 @@ export function usePanel() {
     dispatch({ type: 'toggle_context' });
   }
   function retry() {
-    fireActivation({ kind: 'retry' }); // re-activate the worker gate → afterActivation restarts timer + gate_blocked
+    // Blocked (worker stalled) → re-activate the worker gate (afterActivation re-posts
+    // gate_blocked to re-drive provisioning). Disconnected (bridge stalled) → re-attempt
+    // the whole gate sequence, which re-checks the connection.
+    if (stateRef.current.activation.phase === 'disconnected') void gateToActiveTab(boundTabId.current);
+    else fireActivation({ kind: 'retry' });
   }
 
   return {

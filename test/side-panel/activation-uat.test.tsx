@@ -146,16 +146,41 @@ describe('activation readiness UAT', () => {
 
   // Re-homed from panel-routing-uat's old "#180 not-connected" case: a host that
   // never reports connected is not a transient "starting" — the bridge gate hard-
-  // stalls to `disconnected`. Distinct from readying/blocked: the gate-checklist
-  // overlay is dismissed for a host-down, but input stays locked.
-  it('bridge stall → disconnected: overlay dismissed but input stays locked', async () => {
+  // stalls to `disconnected`. The overlay stays up with the actionable bridge-
+  // stalled line so the user knows to start the CLI, and input stays locked.
+  it('bridge stall → disconnected: overlay stays with an actionable line, input locked', async () => {
     const h = mount(F5_TAB);
     await settle(); // boot → bridge active; status never arrives
     expect(txt(h.container)).toContain('getting ready…'); // readying while the bridge is in flight
     expect(sendDisabled(h.container)).toBe(true);
     jest.advanceTimersByTime(10_000); // bridge hard timeout → disconnected
     await settle();
-    expect(txt(h.container)).not.toContain('getting ready…'); // overlay gone (host-down, not a checklist)
-    expect(sendDisabled(h.container)).toBe(true); // but the composer is still locked
+    expect(txt(h.container)).toContain('xcsh not connected — start the CLI'); // overlay stays, actionable
+    expect(sendDisabled(h.container)).toBe(true); // composer stays locked
+  });
+
+  // Recovery: after the bridge hard-stalls to `disconnected`, a later
+  // {status, connected:true} (xcsh finally started) must re-gate the tab so the
+  // sequence restarts — not be ignored until a manual tab refocus.
+  it('disconnected → status connected re-gates and drives on to ready', async () => {
+    const h = mount(F5_TAB);
+    await settle();
+    jest.advanceTimersByTime(10_000); // bridge hard timeout → disconnected
+    await settle();
+    expect(txt(h.container)).toContain('xcsh not connected — start the CLI');
+
+    h.push({ type: 'status', connected: true }); // xcsh started → re-gate the whole sequence
+    await settle();
+    expect(txt(h.container)).not.toContain('xcsh not connected — start the CLI'); // left disconnected
+    expect(txt(h.container)).toContain('starting worker…'); // fresh run: bridge passed, worker active
+
+    h.push({ type: 'bridges', tenants: [{ tenant: F5_KEY, env: 'production' }] });
+    await settle();
+    const runId = lastReqId(h.posted);
+    expect(typeof runId).toBe('number');
+    h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId });
+    await settle();
+    expect(txt(h.container)).not.toContain('getting ready…');
+    expect(sendDisabled(h.container)).toBe(false); // recovered all the way to ready
   });
 });

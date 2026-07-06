@@ -13,6 +13,17 @@ const readying = () =>
     100,
   );
 const blocked = () => activationReducer(readying(), { kind: 'timeout', gate: 'worker' }, 15_100);
+// bridge active (unconnected reset), then hard bridge timeout → disconnected
+const disconnected = () =>
+  activationReducer(
+    activationReducer(
+      initActivation(),
+      { kind: 'reset', tenant: true, cold: true, connected: false, workerLive: false },
+      100,
+    ),
+    { kind: 'timeout', gate: 'bridge' },
+    10_100,
+  );
 
 describe('ActivationOverlay', () => {
   it('shows the title, the passed bridge label + frozen ms, the active worker label, and no Retry while readying', () => {
@@ -28,6 +39,14 @@ describe('ActivationOverlay', () => {
     const onRetry = mock(() => {});
     render(<ActivationOverlay activation={blocked()} onRetry={onRetry} />);
     expect(screen.getByText("xcsh didn't start")).toBeTruthy();
+    fireEvent.click(screen.getByText('Retry'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the bridge-stalled line and a Retry button that fires onRetry when disconnected', () => {
+    const onRetry = mock(() => {});
+    render(<ActivationOverlay activation={disconnected()} onRetry={onRetry} />);
+    expect(screen.getByText('xcsh not connected — start the CLI')).toBeTruthy();
     fireEvent.click(screen.getByText('Retry'));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });

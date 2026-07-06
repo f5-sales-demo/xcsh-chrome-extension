@@ -93,11 +93,15 @@ describe('activation in panel state', () => {
     expect(panelReducer(s, { type: 'set_session_label', label: 'acme·staging' }).sessionLabel).toBe('acme·staging');
   });
 
-  it('overlayVisible is true only while readying or blocked', () => {
+  it('overlayVisible is true while readying, blocked, or disconnected', () => {
     const readying = { ...base(), activation: act({ connected: true }) };
     const blocked = {
       ...base(),
       activation: activationReducer(act({ connected: true }), { kind: 'timeout', gate: 'worker' }, 15_100),
+    };
+    const disconnected = {
+      ...base(),
+      activation: activationReducer(act(), { kind: 'timeout', gate: 'bridge' }, 10_100),
     };
     const ready = {
       ...base(),
@@ -105,6 +109,7 @@ describe('activation in panel state', () => {
     };
     expect(overlayVisible(readying)).toBe(true);
     expect(overlayVisible(blocked)).toBe(true);
+    expect(overlayVisible(disconnected)).toBe(true);
     expect(overlayVisible(ready)).toBe(false);
     expect(overlayVisible(base())).toBe(false); // inactive
   });

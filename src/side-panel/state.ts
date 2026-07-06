@@ -121,10 +121,12 @@ export function contextChipText(s: PanelState): string {
 }
 
 /** The "getting ready" overlay covers the panel (transcript hidden) while a
- *  hard gate is pending or has stalled. */
+ *  hard gate is pending or has stalled — readying (gates in flight), blocked
+ *  (worker stalled), and disconnected (bridge stalled). For blocked/disconnected
+ *  the overlay carries the actionable stall line + a Retry button. */
 export function overlayVisible(s: Pick<PanelState, 'activation'>): boolean {
   const p = s.activation.phase;
-  return p === 'readying' || p === 'blocked';
+  return p === 'readying' || p === 'blocked' || p === 'disconnected';
 }
 
 /** Composer is locked until the panel is usable — readying (gates in flight),
