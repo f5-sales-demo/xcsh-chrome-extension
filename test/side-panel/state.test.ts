@@ -19,23 +19,6 @@ const act = (over: Partial<{ connected: boolean; workerLive: boolean }> = {}) =>
     0,
   );
 
-describe('provisioning indicator (#180)', () => {
-  it('composerPlaceholder shows "starting xcsh…" while provisioning, else the default', () => {
-    expect(composerPlaceholder({ ...base(), provisioning: true })).toBe('starting xcsh for this tab…');
-    expect(composerPlaceholder({ ...base(), provisioning: false })).toBe('ask xcsh about this page…');
-  });
-  it('set_provisioning toggles the flag', () => {
-    const on = panelReducer(base(), { type: 'set_provisioning', on: true });
-    expect(on.provisioning).toBe(true);
-    expect(panelReducer(on, { type: 'set_provisioning', on: false }).provisioning).toBe(false);
-  });
-  it('becoming an active tenant clears a pending provisioning indicator (worker bound)', () => {
-    const provisioning = panelReducer(base(), { type: 'set_provisioning', on: true });
-    const active = panelReducer(provisioning, { type: 'set_active_tenant', label: 'acme·staging' });
-    expect(active.provisioning).toBe(false);
-  });
-});
-
 describe('panelReducer', () => {
   it('toggles connection', () => {
     const s = panelReducer(base(), { type: 'connected', on: true });
@@ -70,11 +53,31 @@ describe('panelReducer', () => {
     expect(msg?.text).toBe('boom');
   });
 
-  it('derives context-chip text', () => {
-    let s = panelReducer(base(), { type: 'page_context', meta: { title: 'Load Balancers' }, snapshot: {} });
-    expect(contextChipText(s)).toBe('Load Balancers');
-    s = panelReducer(s, { type: 'set_inactive', label: '' });
-    expect(contextChipText(s)).toBe('open an F5 XC console page');
+  it('composerPlaceholder shows the readying text in readying/blocked, else the default', () => {
+    expect(composerPlaceholder({ ...base(), activation: act({ connected: true }) })).toBe(
+      'starting xcsh for this tab…',
+    );
+    expect(composerPlaceholder(base())).toBe('ask xcsh about this page…');
+  });
+
+  it('derives context-chip text from the activation phase', () => {
+    expect(contextChipText(base())).toBe('open an F5 XC console page'); // inactive
+    const ready = {
+      ...base(),
+      attachContext: true,
+      contextMeta: { title: 'Load Balancers' },
+      activation: activationReducer(act({ connected: true, workerLive: true }), { kind: 'page' }, 50),
+    };
+    expect(contextChipText(ready)).toBe('Load Balancers');
+    const degraded = {
+      ...base(),
+      activation: activationReducer(
+        act({ connected: true, workerLive: true }),
+        { kind: 'timeout', gate: 'page' },
+        5_100,
+      ),
+    };
+    expect(contextChipText(degraded)).toBe('page unavailable');
   });
 });
 

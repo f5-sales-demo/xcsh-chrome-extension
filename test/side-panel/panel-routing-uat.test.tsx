@@ -1,17 +1,23 @@
 /**
- * Automated UAT for the panel↔SW routing WIRING (#166). The pure decisions
+ * Automated UAT for the panel↔SW routing WIRING (#166), retargeted onto the
+ * tab-activation readiness model (Task 6 cutover). The pure decisions
  * (resolveChatPort tenant guard, staleTabPorts, contextTabFor, gateBlockEvidence)
  * are unit-tested elsewhere; this file exercises the LIVE `usePanel` hook end to
  * end through a controllable `chrome` stub and asserts the messages it actually
  * emits to the service worker — the integration seam that a pure test can't reach
  * and where the earlier regression slipped through.
  *
- * We render a tiny harness that calls the real `usePanel()` and captures its API,
- * then drive it: push SW→panel frames onto the port, fire tab activations, and
- * assert the panel's outbound frames carry the right tab + tenant identity.
+ * Readiness is now the activation phase (bridge→worker→page gates), not the old
+ * `inputBlocked`/`provisioning` flags. `driveToReady` walks the panel to `ready`
+ * the way the SW would — status (bridge) → bridges (worker) → a reqId-correlated
+ * page_context (page) — so a send is only attempted once `inputLocked` is false.
+ * The routing-isolation assertions (a frame carries the right tab + tenant; same-
+ * tab self-nav does not suspend; a real cross-tab switch does) are preserved
+ * verbatim; only the readiness plumbing around them changed.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { cleanup, render, waitFor } from '@testing-library/preact';
+import { inputLocked, overlayVisible } from '../../src/side-panel/state';
 import { usePanel } from '../../src/side-panel/use-panel';
 
 type Posted = Record<string, unknown>;
@@ -27,6 +33,7 @@ interface Harness {
 const F5_PROD_TAB = { id: 7, url: 'https://f5-amer-ent.console.ves.volterra.io/web/home' };
 const GLOBEX_TAB = { id: 8, url: 'https://globex.console.ves.volterra.io/web/home' };
 const F5_KEY = 'f5-amer-ent|production';
+const GLOBEX_KEY = 'globex|production';
 
 // Build a controllable chrome stub + a harness component that exposes usePanel's API.
 function mount(activeTab: { id: number; url: string }, tabsById: Record<number, { id: number; url: string }>): Harness {
@@ -95,6 +102,19 @@ function mount(activeTab: { id: number; url: string }, tabsById: Record<number, 
 const lastOfType = (posted: Posted[], type: string): Posted | undefined =>
   [...posted].reverse().find((m) => m.type === type);
 
+// Walk the panel to `ready` (input unlocked) for its currently-focused tab, the way
+// the SW would: bridge (status) → worker (bridges) → page (a reqId-correlated
+// page_context). Mirrors the correlation pattern in activation-uat.test.tsx.
+async function driveToReady(h: Harness, tenants: Array<{ tenant: string; env: string }>) {
+  h.pushToPanel({ type: 'status', connected: true });
+  await waitFor(() => expect(h.api().state.activation.gates.bridge.status).toBe('passed'));
+  h.pushToPanel({ type: 'bridges', tenants });
+  await waitFor(() => expect(h.api().state.activation.gates.page.status).toBe('active'));
+  const reqId = lastOfType(h.posted, 'get_page_context')?.reqId as number;
+  h.pushToPanel({ type: 'page_context', snapshot: { title: 'Home', path: '/web/home' }, reqId });
+  await waitFor(() => expect(inputLocked(h.api().state)).toBe(false));
+}
+
 let prevChrome: unknown;
 beforeEach(() => {
   prevChrome = (globalThis as { chrome?: unknown }).chrome;
@@ -107,10 +127,8 @@ afterEach(() => {
 describe('panel routing UAT (#166)', () => {
   it('RC-1/RC-2: a send carries the panel tab id AND its current session key', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
-    // SW reports the tenant live + connected, so the gate unblocks this tab.
-    h.pushToPanel({ type: 'status', connected: true });
-    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: true }] });
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+    // Bridge→worker→page all pass for this tab → the readiness gate unlocks input.
+    await driveToReady(h, [{ tenant: F5_KEY, env: 'production' }]);
 
     h.api().sendMessage('who are you?');
 
@@ -120,9 +138,10 @@ describe('panel routing UAT (#166)', () => {
     expect(req?.sessionKey).toBe(F5_KEY);
   });
 
-  it('RC-3: a valid tenant tab with no live worker emits gate_blocked{tabId,key} and blocks input', async () => {
+  it('RC-3: a valid tenant tab with no live worker emits gate_blocked{tabId,key} and locks input', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
-    // Connected, but NO bridge advertises this tenant → gate must block + signal.
+    // Connected, but NO bridge advertises this tenant → the worker gate opens with no
+    // live worker, driving the SW re-provision signal and keeping the panel not-ready.
     h.pushToPanel({ type: 'status', connected: true });
     h.pushToPanel({ type: 'bridges', tenants: [] });
 
@@ -130,20 +149,18 @@ describe('panel routing UAT (#166)', () => {
     const blocked = lastOfType(h.posted, 'gate_blocked');
     expect(blocked?.tabId).toBe(7);
     expect(blocked?.key).toBe(F5_KEY);
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(true));
+    // New model: no live worker → readying/blocked (overlay up, input locked), not a
+    // bare inputBlocked flag.
+    await waitFor(() => expect(inputLocked(h.api().state)).toBe(true));
+    expect(overlayVisible(h.api().state)).toBe(true);
   });
 
   it('RC-2: switching to another tenant tab re-fetches page context for the FOCUSED tab', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: GLOBEX_TAB });
-    h.pushToPanel({ type: 'status', connected: true });
-    h.pushToPanel({
-      type: 'bridges',
-      tenants: [
-        { tenant: F5_KEY, contextBound: true },
-        { tenant: 'globex|production', contextBound: true },
-      ],
-    });
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+    await driveToReady(h, [
+      { tenant: F5_KEY, env: 'production' },
+      { tenant: GLOBEX_KEY, env: 'production' },
+    ]);
     const before = h.posted.length;
 
     h.fireActivated(8); // user focuses the globex tab
@@ -160,9 +177,7 @@ describe('panel routing UAT (#166)', () => {
     // the in-flight turn (same tab), or its post-navigation stream is dropped by the
     // active.id guard and the panel shows only a spinner with no text.
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
-    h.pushToPanel({ type: 'status', connected: true });
-    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: true }] });
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+    await driveToReady(h, [{ tenant: F5_KEY, env: 'production' }]);
 
     h.api().sendMessage('navigate to health checks');
     await waitFor(() => expect(h.api().state.active).toBeTruthy());
@@ -181,29 +196,25 @@ describe('panel routing UAT (#166)', () => {
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating to Health Checks.'));
   });
 
-  it('#180: a connected tenant tab with no worker shows "starting xcsh…", cleared once it binds', async () => {
+  it('readiness: a connected tenant tab with no worker is readying (overlay up, "starting" placeholder), then ready once it binds + reads', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
     h.pushToPanel({ type: 'status', connected: true });
     h.pushToPanel({ type: 'bridges', tenants: [] }); // connected, but no worker for this tenant yet
 
-    await waitFor(() => expect(h.api().state.provisioning).toBe(true));
+    await waitFor(() => expect(overlayVisible(h.api().state)).toBe(true));
+    expect(inputLocked(h.api().state)).toBe(true);
+    expect(h.api().state.activation.phase).toBe('readying');
     expect(h.api().placeholder).toBe('starting xcsh for this tab…');
-    expect(h.api().state.inputBlocked).toBe(true);
 
-    // Worker binds → the tenant goes live → provisioning clears and input unblocks.
-    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: true }] });
-    await waitFor(() => expect(h.api().state.provisioning).toBe(false));
-    expect(h.api().state.inputBlocked).toBe(false);
-    expect(h.api().placeholder).toBe('ask xcsh about this page…');
-  });
+    // Worker binds → the tenant goes live → worker gate passes, page opens; a fresh
+    // snapshot for the run passes the page gate → ready, input unlocks.
+    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, env: 'production' }] });
+    await waitFor(() => expect(h.api().state.activation.gates.page.status).toBe('active'));
+    const reqId = lastOfType(h.posted, 'get_page_context')?.reqId as number;
+    h.pushToPanel({ type: 'page_context', snapshot: { title: 'Home', path: '/web/home' }, reqId });
 
-  it('#180: a blocked tab that is NOT connected does not show "starting" (real connection issue)', async () => {
-    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
-    h.pushToPanel({ type: 'status', connected: false });
-    h.pushToPanel({ type: 'bridges', tenants: [] });
-
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(true));
-    expect(h.api().state.provisioning).toBe(false);
+    await waitFor(() => expect(inputLocked(h.api().state)).toBe(false));
+    expect(overlayVisible(h.api().state)).toBe(false);
     expect(h.api().placeholder).toBe('ask xcsh about this page…');
   });
 
@@ -212,15 +223,10 @@ describe('panel routing UAT (#166)', () => {
     // suspend the in-flight turn so tab 8 can start its own and tab 7's stream is
     // dropped (preserved in storage, not bled into tab 8).
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: GLOBEX_TAB });
-    h.pushToPanel({ type: 'status', connected: true });
-    h.pushToPanel({
-      type: 'bridges',
-      tenants: [
-        { tenant: F5_KEY, contextBound: true },
-        { tenant: 'globex|production', contextBound: true },
-      ],
-    });
-    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+    await driveToReady(h, [
+      { tenant: F5_KEY, env: 'production' },
+      { tenant: GLOBEX_KEY, env: 'production' },
+    ]);
 
     h.api().sendMessage('do a thing');
     await waitFor(() => expect(h.api().state.active).toBeTruthy());

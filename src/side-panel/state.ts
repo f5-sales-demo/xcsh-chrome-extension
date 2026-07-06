@@ -124,18 +124,20 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
   }
 }
 
-/** Composer placeholder: surface the provision→bind window as "starting xcsh…"
- *  so first-focus latency reads as progress, not a hang (#180). */
-export function composerPlaceholder(s: Pick<PanelState, 'provisioning'>): string {
-  return s.provisioning ? 'starting xcsh for this tab…' : 'ask xcsh about this page…';
+/** Composer placeholder: "starting xcsh…" while the readiness overlay is up
+ *  (readying/blocked), else the default. */
+export function composerPlaceholder(s: Pick<PanelState, 'activation'>): string {
+  const p = s.activation.phase;
+  return p === 'readying' || p === 'blocked' ? 'starting xcsh for this tab…' : 'ask xcsh about this page…';
 }
 
-/** Mirrors the old renderContextChip() text rules. */
+/** Context-chip text, derived from the activation phase: inactive → guidance,
+ *  degraded → honest 'page unavailable', else the attached page title/state. */
 export function contextChipText(s: PanelState): string {
-  if (s.panelInactive) return 'open an F5 XC console page';
-  if (s.attachContext && s.contextMeta) {
-    return s.contextMeta.title ?? s.contextMeta.path ?? 'current page';
-  }
+  const p = s.activation.phase;
+  if (p === 'inactive') return 'open an F5 XC console page';
+  if (p === 'degraded') return 'page unavailable';
+  if (s.attachContext && s.contextMeta) return s.contextMeta.title ?? s.contextMeta.path ?? 'current page';
   return s.attachContext ? 'no page attached' : 'context off';
 }
 
