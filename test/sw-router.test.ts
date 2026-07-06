@@ -6,7 +6,42 @@
  * branch logic the SW used to inline untested — the seam RC-1/RC-2/RC-3 live on.
  */
 import { describe, expect, test } from 'bun:test';
-import { NO_WORKER_FOR_TAB, planChatRequest, planHelloAck, planReTenant, planToolRequest } from '../src/sw-router';
+import {
+  NO_WORKER_FOR_TAB,
+  planChatRequest,
+  planHelloAck,
+  planReprovision,
+  planReTenant,
+  planToolRequest,
+} from '../src/sw-router';
+
+// #182: a persistent no-own-worker gate-block should re-provision (rate-limited)
+// so a tab whose worker died mid-session recovers, instead of sitting blocked
+// forever (the panel's block was previously diagnostic-only).
+describe('planReprovision (#182)', () => {
+  const base = {
+    hasWorker: false,
+    manualPinned: false,
+    connected: true,
+    lastAt: undefined,
+    now: 10_000,
+    minIntervalMs: 5_000,
+  };
+  test('re-provisions when blocked, connected, not pinned, and outside the rate-limit window', () => {
+    expect(planReprovision(base)).toEqual({ kind: 'reprovision' });
+    expect(planReprovision({ ...base, lastAt: 4_000 })).toEqual({ kind: 'reprovision' }); // 6s ago > 5s
+  });
+  test('skips when a worker already exists for the tab', () => {
+    expect(planReprovision({ ...base, hasWorker: true })).toEqual({ kind: 'skip' });
+  });
+  test('skips in manual-pinned mode and when disconnected', () => {
+    expect(planReprovision({ ...base, manualPinned: true })).toEqual({ kind: 'skip' });
+    expect(planReprovision({ ...base, connected: false })).toEqual({ kind: 'skip' });
+  });
+  test('skips within the rate-limit window', () => {
+    expect(planReprovision({ ...base, lastAt: 6_000 })).toEqual({ kind: 'skip' }); // 4s ago < 5s
+  });
+});
 
 type Reg = Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>;
 const allOpen = () => true;
