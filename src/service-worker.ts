@@ -26,6 +26,7 @@ import {
   pushCapped,
   summarizeActivations,
   summarizeSuspension,
+  summarizeTtft,
   summarizeTurns,
 } from './diagnostics';
 import { runDispatch } from './dispatch';
@@ -1221,6 +1222,7 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
   read_network: readNetwork,
   diag_suspension: diagSuspension,
   diag_activation: diagActivation,
+  diag_ttft: diagTtft,
   // Read-only diagnostics for the agent — expose only a short sessionId suffix,
   // never the full process id (tenant-isolation hardening).
   diag_bridges: () =>
@@ -2881,6 +2883,12 @@ async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; eve
  *  (bridge/worker/page ms, total, cold/warm, terminal phase). */
 async function diagActivation(): Promise<{ runs: unknown }> {
   return { runs: summarizeActivations(diagBuffer) };
+}
+
+/** Read-only: the most recent init→first-token timeline (per-stage ms, total,
+ *  dominant stage, cold/warm) stitched from extension + xcsh spans. */
+async function diagTtft(): Promise<{ timeline: unknown }> {
+  return { timeline: summarizeTtft(diagBuffer) };
 }
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,
