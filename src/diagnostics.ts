@@ -50,6 +50,42 @@ export interface SuspensionSummary {
   missedBinds: number;
 }
 
+export interface TurnSummary {
+  /** chat_request turns that resolved to a worker port. */
+  routed: number;
+  /** chat_request turns refused because the tab had no live worker. */
+  errored: number;
+  /** routed turns that received at least one inbound reply. */
+  replied: number;
+  /** routed turn ids with NO reply in the buffer — the "accepted but stalled" or
+   *  "delivered but dropped" signal that gate_block never captured (#170). */
+  unanswered: string[];
+  /** slowest observed first-reply latency (ms). */
+  maxReplyMs: number;
+}
+
+/** Pair `chat_route` events (turn → port, or error) with `chat_reply` events
+ *  (first-inbound latency) by turn id, so a routed-but-unanswered turn surfaces
+ *  in diag_suspension. Pure: the SW stamps the events + latency; this only reads. */
+export function summarizeTurns(events: DiagEvent[]): TurnSummary {
+  const routedIds = new Set<string>();
+  const repliedIds = new Set<string>();
+  let errored = 0;
+  let maxReplyMs = 0;
+  for (const e of events) {
+    if (e.event === 'chat_route') {
+      if (typeof e.port === 'number') routedIds.add(String(e.id));
+      else if (e.error === true) errored++;
+    } else if (e.event === 'chat_reply') {
+      repliedIds.add(String(e.id));
+      if (typeof e.ms === 'number' && e.ms > maxReplyMs) maxReplyMs = e.ms;
+    }
+  }
+  const unanswered = [...routedIds].filter((id) => !repliedIds.has(id));
+  const replied = routedIds.size - unanswered.length;
+  return { routed: routedIds.size, errored, replied, unanswered, maxReplyMs };
+}
+
 /** Summarize a diagnostics buffer into the numbers we care about for Phase 0a. */
 export function summarizeSuspension(events: DiagEvent[]): SuspensionSummary {
   const tickTimes = events.filter((e) => e.event === 'keepalive').map((e) => e.t);
