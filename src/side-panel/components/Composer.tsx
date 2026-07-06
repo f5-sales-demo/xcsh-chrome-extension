@@ -103,7 +103,14 @@ export function Composer({
           ))}
         </select>
         {sending ? (
-          <button id="stop" type="button" class="footerBtn sendBtn stopBtn" title="stop" aria-label="stop" onClick={onStop}>
+          <button
+            id="stop"
+            type="button"
+            class="footerBtn sendBtn stopBtn"
+            title="stop"
+            aria-label="stop"
+            onClick={onStop}
+          >
             <StopIcon />
           </button>
         ) : (

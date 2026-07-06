@@ -49,13 +49,7 @@ function gradientFor(pct: number): { bg: string; fg: string } {
   return chosen;
 }
 
-export function StatusBar({
-  contextPct,
-  sessionLabel,
-}: {
-  contextPct: number | null;
-  sessionLabel: string;
-}) {
+export function StatusBar({ contextPct, sessionLabel }: { contextPct: number | null; sessionLabel: string }) {
   const g = contextPct != null ? gradientFor(contextPct) : null;
   return (
     // Transparent: the chips are embedded onto the composer's top border (the
@@ -64,13 +58,18 @@ export function StatusBar({
     <div class="statusbar">
       {g && (
         <span class="seg seg-context" style={{ background: g.bg, color: g.fg }}>
-          {Math.round(contextPct as number)}%<span class="sep-r" style={{ color: g.bg }}>▶</span>
+          {Math.round(contextPct as number)}%
+          <span class="sep-r" style={{ color: g.bg }}>
+            ▶
+          </span>
         </span>
       )}
       <span class="seg-spacer" />
       {sessionLabel && (
         <span class="seg seg-session" style={{ background: COLORS.f5Red, color: SESSION_FG }}>
-          <span class="sep-l" style={{ color: COLORS.f5Red }}>◀</span>
+          <span class="sep-l" style={{ color: COLORS.f5Red }}>
+            ◀
+          </span>
           {sessionLabel}
         </span>
       )}
