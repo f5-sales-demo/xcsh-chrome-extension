@@ -153,4 +153,54 @@ describe('panel routing UAT (#166)', () => {
       expect(ctx?.tabId).toBe(8);
     });
   });
+
+  it('an agent navigating its OWN tab mid-turn does NOT suspend the turn (reply keeps rendering)', async () => {
+    // Regression for the "response not shown" bug: a navigation/tool turn changes
+    // the tab's URL, which fires onUpdated → gateToActiveTab. That must not suspend
+    // the in-flight turn (same tab), or its post-navigation stream is dropped by the
+    // active.id guard and the panel shows only a spinner with no text.
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    h.pushToPanel({ type: 'status', connected: true });
+    h.pushToPanel({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: true }] });
+    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+
+    h.api().sendMessage('navigate to health checks');
+    await waitFor(() => expect(h.api().state.active).toBeTruthy());
+    const turnId = lastOfType(h.posted, 'chat_request')?.id as string;
+
+    // First delta streams in fine.
+    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 0, delta: 'Navigating' });
+    await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
+
+    // The agent navigates THIS tab — its URL changes, firing onUpdated for tab 7.
+    h.fireUpdated(7, 'https://f5-amer-ent.console.ves.volterra.io/web/other');
+
+    // The turn must still be active (not suspended) so the rest of the reply renders.
+    await waitFor(() => expect(h.api().state.active?.id).toBe(turnId));
+    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 1, delta: ' to Health Checks.' });
+    await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating to Health Checks.'));
+  });
+
+  it('switching to a DIFFERENT tab mid-turn DOES suspend (no cross-tab bleed)', async () => {
+    // The other direction of the same guard: a genuine tab switch must still
+    // suspend the in-flight turn so tab 8 can start its own and tab 7's stream is
+    // dropped (preserved in storage, not bled into tab 8).
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: GLOBEX_TAB });
+    h.pushToPanel({ type: 'status', connected: true });
+    h.pushToPanel({
+      type: 'bridges',
+      tenants: [
+        { tenant: F5_KEY, contextBound: true },
+        { tenant: 'globex|production', contextBound: true },
+      ],
+    });
+    await waitFor(() => expect(h.api().state.inputBlocked).toBe(false));
+
+    h.api().sendMessage('do a thing');
+    await waitFor(() => expect(h.api().state.active).toBeTruthy());
+
+    h.fireActivated(8); // user switches to the globex tab
+
+    await waitFor(() => expect(h.api().state.active).toBeNull());
+  });
 });
