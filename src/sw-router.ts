@@ -82,6 +82,32 @@ export function planHelloAck(msg: HelloAckLike, ownContractVersion: string): Hel
   };
 }
 
+export interface ReprovisionInput {
+  /** does the tab already have a worker (portForTab defined)? */
+  hasWorker: boolean;
+  /** manual single-port pin mode (never auto-provisions). */
+  manualPinned: boolean;
+  /** any bridge socket open — the host/manager is reachable. */
+  connected: boolean;
+  /** epoch ms of the last re-provision for this sid, or undefined. */
+  lastAt: number | undefined;
+  now: number;
+  minIntervalMs: number;
+}
+
+export type ReprovisionPlan = { kind: 'reprovision' } | { kind: 'skip' };
+
+/** Decide whether a persistent no-own-worker gate-block should re-provision the
+ *  tab's worker (#182). The panel re-blocks repeatedly while a focused tab has no
+ *  worker; making that actionable recovers a tab whose worker died mid-session
+ *  (the only other provision triggers are activation/startup). Rate-limited per
+ *  sid, and only when the host is reachable and not pinned. */
+export function planReprovision(i: ReprovisionInput): ReprovisionPlan {
+  if (i.hasWorker || i.manualPinned || !i.connected) return { kind: 'skip' };
+  if (i.lastAt !== undefined && i.now - i.lastAt < i.minIntervalMs) return { kind: 'skip' };
+  return { kind: 'reprovision' };
+}
+
 export type ReTenantPlan =
   | { kind: 'noop' }
   | { kind: 'retenant'; releaseSid: string; evictPorts: number[]; provisionTenant: string | null };
