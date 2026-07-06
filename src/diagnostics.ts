@@ -242,10 +242,13 @@ export function summarizeActivations(events: DiagEvent[], limit = 10): Activatio
   return [...byRun.values()].sort((a, b) => b.runId - a.runId).slice(0, limit);
 }
 
-/** High-frequency lifecycle ticks kept in a separate small ring so they don't
- *  evict signal telemetry (spans, activation, chat_*) from the main buffer. */
+/** The keepalive tick is the only high-frequency event; it's kept in a separate
+ *  small ring so a flood of ticks can't evict signal telemetry (spans, activation,
+ *  chat_*) from the main buffer. `suspend`/`suspend_canceled` are low-frequency
+ *  signals (summarizeSuspension counts them; they bound the suspension window), so
+ *  they stay in the main signal ring where a long keepalive window can't evict them. */
 export function isNoiseKind(event: string): boolean {
-  return event === 'keepalive' || event === 'suspend' || event === 'suspend_canceled';
+  return event === 'keepalive';
 }
 
 export interface TtftStage {
@@ -324,7 +327,6 @@ export function summarizeTtft(events: DiagEvent[]): TtftTimeline | null {
     const kids = TTFT_ENVELOPES[s.stage];
     return !kids || !kids.every((k) => present.has(k));
   });
-  if (stages.length === 0) return null;
   const total = stages.reduce((n, s) => n + s.ms, 0);
   const dominant = stages.reduce((m, s) => (s.ms > m.ms ? s : m)).stage;
   return { turnId, sid, cold, stages, total, dominant };
