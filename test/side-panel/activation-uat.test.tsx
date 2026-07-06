@@ -235,4 +235,30 @@ describe('activation readiness UAT', () => {
     expect(txt(h.container)).not.toContain('getting ready…'); // matching reqId → page passes
     expect(sendDisabled(h.container)).toBe(false);
   });
+
+  // Recovery: a tab's worker dying mid-session (a `bridges` frame that no longer
+  // lists its tenant) while the panel is `ready` must re-gate — drop back to the
+  // readying overlay, lock input, and re-drive provisioning (#183). It must NOT
+  // silently stay "ready" pointing at a dead worker (the same-tab soft-refresh
+  // guard, #175, must not swallow this recovery).
+  it('worker vanishing while ready re-gates to recover (not stuck ready on a dead worker)', async () => {
+    const h = mount(F5_TAB);
+    await settle();
+    h.push({ type: 'status', connected: true });
+    await settle();
+    h.push({ type: 'bridges', tenants: [{ tenant: F5_KEY, env: 'production' }] });
+    await settle();
+    const runId = lastReqId(h.posted) as number;
+    h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId });
+    await settle();
+    expect(txt(h.container)).not.toContain('getting ready…'); // reached ready
+    expect(sendDisabled(h.container)).toBe(false);
+    const blockedBefore = h.posted.filter((m) => m.type === 'gate_blocked').length;
+
+    h.push({ type: 'bridges', tenants: [] }); // this tab's worker vanished
+    await settle();
+    expect(txt(h.container)).toContain('getting ready…'); // overlay is back (re-gated)
+    expect(sendDisabled(h.container)).toBe(true); // input locked again
+    expect(h.posted.filter((m) => m.type === 'gate_blocked').length).toBeGreaterThan(blockedBefore); // reprovision re-driven
+  });
 });

@@ -157,10 +157,14 @@ export function usePanel() {
     }
   }
 
-  function beginActivation(keyStr: string, tenant: string, env: string, tabId?: number) {
+  // Start a fresh activation run for a tenant tab. The single "reset" primitive —
+  // called by the navigation gate AND by mid-session worker-vanish recovery.
+  // tenant·env for the label are derived from keyStr ("tenant|env"), its source.
+  function beginActivation(keyStr: string, tabId?: number) {
     boundTabId.current = tabId;
     boundSessionKey.current = keyStr;
     pageRequestedForRun.current = -1;
+    const [tenant, env] = keyStr.split('|');
     dispatch({ type: 'set_session_label', label: `${tenant}·${env}` });
     const workerLive = liveTenants.current.some((tt) => tt.tenant === keyStr);
     fireActivation({ kind: 'reset', tenant: true, cold: !workerLive, connected: connectedRef.current, workerLive });
@@ -203,7 +207,7 @@ export function usePanel() {
       bus.post({ type: 'get_page_context', tabId: tab?.id }); // reqId-less → updates chip, never re-gates
       return;
     }
-    if (keyStr && key) beginActivation(keyStr, key.tenant, key.env, tab?.id);
+    if (keyStr) beginActivation(keyStr, tab?.id);
     else beginInactive();
   }
 
@@ -233,7 +237,11 @@ export function usePanel() {
         if (live && a.gates.bridge.status === 'passed' && a.gates.worker.status === 'active') {
           fireActivation({ kind: 'worker' }); // this tab's worker just came live
         } else if (!live && boundSessionKey.current && (a.phase === 'ready' || a.phase === 'degraded')) {
-          void gateToActiveTab(boundTabId.current); // worker vanished mid-session → re-gate (recovers via #183)
+          // The tab's worker vanished mid-session. Force a fresh run directly (NOT
+          // gateToActiveTab, whose same-tab soft-refresh guard would no-op here) so we
+          // drop back to readying → worker gate → gate_blocked → reprovision (#183).
+          // #175's same-tab self-nav soft-refresh is unaffected.
+          beginActivation(boundSessionKey.current, boundTabId.current);
         }
         return;
       }
