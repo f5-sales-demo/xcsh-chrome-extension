@@ -22,9 +22,11 @@ import {
   type DiagEvent,
   extractRedirects,
   gateBlockEvidence,
+  isNoiseKind,
   pushCapped,
   summarizeActivations,
   summarizeSuspension,
+  summarizeTtft,
   summarizeTurns,
 } from './diagnostics';
 import { runDispatch } from './dispatch';
@@ -291,24 +293,53 @@ let observingNetwork = false;
 // it SURVIVES service-worker restarts — the whole point is to measure MV3
 // suspension (gaps between keepalive ticks) and binds missed while suspended.
 const DIAG_CAP = 400;
+const NOISE_CAP = 60;
 const DIAG_KEY = 'xcsh.diag.suspension';
+const DIAG_NOISE_KEY = 'xcsh.diag.noise';
 let diagBuffer: DiagEvent[] = [];
+let diagNoise: DiagEvent[] = [];
 let diagFlushTimer: ReturnType<typeof setTimeout> | null = null;
 function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
-  pushCapped(diagBuffer, { t: Date.now(), event, ...detail }, DIAG_CAP);
+  const rec = { t: Date.now(), event, ...detail };
+  if (isNoiseKind(event)) pushCapped(diagNoise, rec, NOISE_CAP);
+  else pushCapped(diagBuffer, rec, DIAG_CAP);
   if (diagFlushTimer) return; // debounce persistence (~1s) to avoid storage churn
   diagFlushTimer = setTimeout(() => {
     diagFlushTimer = null;
-    chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+    chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
   }, 1000);
 }
+// TTFT (#170): emit one uniform `span` telemetry event. summarizeTtft joins these
+// into the init→first-token timeline; `id` links a chat turn, `sid` links a
+// session's cold-start segment, `cold` (carried by send_to_route) gates whether
+// the per-sid cold-start spans attach to the turn.
+function recordSpan(
+  stage: string,
+  ms: number,
+  extra: { id?: string; sid?: string; cold?: boolean; proc?: 'ext' | 'xcsh' } = {},
+): void {
+  recordDiag('span', {
+    proc: extra.proc ?? 'ext',
+    stage,
+    ms,
+    ...(extra.id ? { id: extra.id } : {}),
+    ...(extra.sid ? { sid: extra.sid } : {}),
+    ...(extra.cold !== undefined ? { cold: extra.cold } : {}),
+  });
+}
+// sid → epoch ms of the provision nm_send, consumed once when its worker registers.
+const provisionSentAt = new Map<string, number>();
+// sids whose worker just (re)registered → the NEXT turn on that sid is a cold start.
+// Cleared by the first send_to_route that consumes it, so navigation between
+// provision and first turn can't lose the cold signal.
+const freshlyProvisioned = new Set<string>();
 // Load persisted history on (re)start, then stamp this SW start — the gap
 // between the previous last event and this sw_start reveals the suspension window.
 chrome.storage.local
-  .get(DIAG_KEY)
+  .get([DIAG_KEY, DIAG_NOISE_KEY])
   .then((r) => {
-    const prior = (r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? [];
-    diagBuffer = prior.slice(-DIAG_CAP);
+    diagBuffer = ((r?.[DIAG_KEY] as DiagEvent[] | undefined) ?? []).slice(-DIAG_CAP);
+    diagNoise = ((r?.[DIAG_NOISE_KEY] as DiagEvent[] | undefined) ?? []).slice(-NOISE_CAP);
     recordDiag('sw_start', {});
   })
   .catch(() => recordDiag('sw_start', {}));
@@ -333,7 +364,7 @@ function wsStateLabel(): string {
 chrome.runtime.onSuspend.addListener(() => {
   recordDiag('suspend', { wsState: wsStateLabel() });
   // Force a synchronous-ish flush; storage.set is best-effort during teardown.
-  chrome.storage.local.set({ [DIAG_KEY]: diagBuffer }).catch(() => {});
+  chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
 });
 chrome.runtime.onSuspendCanceled.addListener(() => recordDiag('suspend_canceled', {}));
 
@@ -596,6 +627,7 @@ function setActiveTenant(sessionKey: string | null, tabId?: number): void {
     portForTab(registry, sidForTab(tabId)) === undefined
   ) {
     nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
+    provisionSentAt.set(sidForTab(tabId), Date.now()); // TTFT: start provision_to_worker
   }
 }
 
@@ -678,6 +710,18 @@ function onMessage(msg: any, sourcePort: number): void {
   dispatchBridgeFrame(msg, {
     onPing: () => sendTo(sourcePort, { type: 'pong' }),
 
+    // Inbound xcsh timing span (Phase 2 in-band telemetry) → record as a uniform
+    // `span` event tagged proc:'xcsh'. Fail-closed on a malformed frame.
+    onSpan: (f) => {
+      if (typeof f.stage !== 'string' || typeof f.ms !== 'number') return;
+      recordSpan(f.stage, f.ms, {
+        proc: 'xcsh',
+        id: typeof f.id === 'string' ? f.id : undefined,
+        sid: typeof f.sid === 'string' ? f.sid : undefined,
+        cold: typeof f.cold === 'boolean' ? f.cold : undefined,
+      });
+    },
+
     // Identity handshake reply — record which tenant this bridge (port) serves.
     onIdentity: (frame) => {
       const plan = planHelloAck(frame, CONTRACT_VERSION);
@@ -701,6 +745,17 @@ function onMessage(msg: any, sourcePort: number): void {
         lastSeen: Date.now(),
       };
       registry.set(sourcePort, info);
+      // TTFT (#170): a worker just became registered for its per-tab sid. If a
+      // provision is pending for that sid, this is the true provision→worker-live
+      // duration; record it once and mark the sid so the next turn is tagged cold.
+      if (info.sessionId) {
+        const pAt = provisionSentAt.get(info.sessionId);
+        if (pAt !== undefined) {
+          recordSpan('provision_to_worker', Date.now() - pAt, { sid: info.sessionId });
+          provisionSentAt.delete(info.sessionId);
+          freshlyProvisioned.add(info.sessionId);
+        }
+      }
       // Bind this worker socket to the tab its per-tab sid names (validated open),
       // so tool_request from this port dispatches to that worker's OWN tab.
       correlatePortToTab(sourcePort, info.sessionId);
@@ -745,6 +800,7 @@ function onMessage(msg: any, sourcePort: number): void {
       const routedAt = turnRoutedAt.get(frame.id);
       if (routedAt !== undefined) {
         recordDiag('chat_reply', { id: frame.id, ms: Date.now() - routedAt });
+        recordSpan('route_first_token', Date.now() - routedAt, { id: frame.id }); // TTFT (#170): route→first-token envelope
         turnRoutedAt.delete(frame.id);
       }
       if (frame.type === 'chat_done' || frame.type === 'chat_error') {
@@ -918,6 +974,15 @@ chrome.runtime.onConnect.addListener((port) => {
       turnToBridgePort.set(plan.id, plan.port); // pin this turn to its origin socket
       turnRoutedAt.set(plan.id, Date.now());
       recordDiag('chat_route', { id: plan.id, tabId: diagTab, port: plan.port });
+      // TTFT (#170): the id↔sid link span. Carries the cold flag so summarizeTtft
+      // attaches this session's cold-start spans (provision_to_worker/gates) only to
+      // the FIRST turn after a fresh worker; the flag is consumed once here.
+      if (diagTab !== null) {
+        const routeSid = sidForTab(diagTab);
+        const cold = freshlyProvisioned.has(routeSid);
+        if (cold) freshlyProvisioned.delete(routeSid);
+        recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
+      }
       sendTo(plan.port, m);
       return;
     }
@@ -962,6 +1027,12 @@ chrome.runtime.onConnect.addListener((port) => {
         outcome: m.outcome,
         ...(typeof m.total === 'number' ? { total: m.total } : {}),
       });
+      // TTFT (#170): the page gate's `total` is the full cold-start activation cost
+      // for this run. Emit it as a per-sid cold-start span keyed to the panel's
+      // bound tab (m.tabId), so summarizeTtft can attach it to that tab's cold turn.
+      if (typeof m.total === 'number' && typeof m.tabId === 'number') {
+        recordSpan('gates', m.total, { sid: sidForTab(m.tabId) });
+      }
       return;
     }
     if (m.type === 'gate_blocked') {
@@ -1003,6 +1074,7 @@ chrome.runtime.onConnect.addListener((port) => {
         if (plan.kind === 'reprovision') {
           reprovisionAt.set(rsid, Date.now());
           nmSend({ type: 'provision', sessionId: rsid, tenant: rkey });
+          provisionSentAt.set(rsid, Date.now()); // TTFT: start provision_to_worker
         }
       }
       return;
@@ -1150,6 +1222,7 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
   read_network: readNetwork,
   diag_suspension: diagSuspension,
   diag_activation: diagActivation,
+  diag_ttft: diagTtft,
   // Read-only diagnostics for the agent — expose only a short sessionId suffix,
   // never the full process id (tenant-isolation hardening).
   diag_bridges: () =>
@@ -2798,10 +2871,11 @@ async function readNetwork(
 /** Read-only: the SW-lifecycle diagnostics buffer + a computed suspension summary
  * (restarts, suspends, max keepalive-tick gap = suspension window, missed binds). */
 async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; events: DiagEvent[] }> {
+  const merged = [...diagBuffer, ...diagNoise].sort((a, b) => a.t - b.t);
   return {
-    summary: summarizeSuspension(diagBuffer),
+    summary: summarizeSuspension(merged),
     turns: summarizeTurns(diagBuffer),
-    events: diagBuffer.slice(-DIAG_CAP),
+    events: merged.slice(-DIAG_CAP),
   };
 }
 
@@ -2809,6 +2883,12 @@ async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; eve
  *  (bridge/worker/page ms, total, cold/warm, terminal phase). */
 async function diagActivation(): Promise<{ runs: unknown }> {
   return { runs: summarizeActivations(diagBuffer) };
+}
+
+/** Read-only: the most recent init→first-token timeline (per-stage ms, total,
+ *  dominant stage, cold/warm) stitched from extension + xcsh spans. */
+async function diagTtft(): Promise<{ timeline: unknown }> {
+  return { timeline: summarizeTtft(diagBuffer) };
 }
 
 /** Capture the login redirect chain from the controlled tab's CDP network events,
@@ -2973,6 +3053,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
     if (reTenant.provisionTenant) {
       nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
+      provisionSentAt.set(reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
     }
   }
   trackTabSessionKey(tabId, activeKey2);

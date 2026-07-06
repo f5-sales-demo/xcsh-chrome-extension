@@ -32,6 +32,7 @@ const EXPECTED_TOOLS = [
   'diag_suspension',
   'diag_bridges',
   'diag_activation',
+  'diag_ttft',
   'capture_login_flow',
   'wait_for_api_response',
   'file_upload',
