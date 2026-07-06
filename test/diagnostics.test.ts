@@ -408,6 +408,33 @@ describe('summarizeTtft', () => {
     expect(t.stages.map((s) => s.ms)).toEqual([0, 0]);
     expect(t.total).toBe(0);
   });
+
+  it('drops the provision_to_worker envelope when its xcsh children are present', () => {
+    const t = summarizeTtft([
+      span('manager_provision', 5, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
+      span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
+      span('provision_to_worker', 830, { sid: 'tab-7' }),
+      span('gates', 40, { sid: 'tab-7' }),
+      span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
+      span('route_first_token', 380, { id: 'c-1' }),
+    ])!;
+    expect(t.stages.map((s) => s.stage)).toEqual([
+      'manager_provision', 'worker_boot', 'gates', 'send_to_route', 'route_first_token',
+    ]);
+    expect(t.total).toBe(5 + 800 + 40 + 3 + 380);
+  });
+
+  it('keeps provision_to_worker when only one xcsh child is present (partial)', () => {
+    const t = summarizeTtft([
+      span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
+      span('provision_to_worker', 830, { sid: 'tab-7' }),
+      span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
+      span('route_first_token', 380, { id: 'c-1' }),
+    ])!;
+    expect(t.stages.map((s) => s.stage)).toEqual([
+      'worker_boot', 'provision_to_worker', 'send_to_route', 'route_first_token',
+    ]);
+  });
 });
 
 describe('isNoiseKind', () => {

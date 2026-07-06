@@ -285,6 +285,7 @@ const TTFT_STAGE_ORDER = [
  *  children are present the envelope must not be summed alongside them. */
 const TTFT_ENVELOPES: Record<string, string[]> = {
   route_first_token: ['chat_handler', 'provider_ttft'],
+  provision_to_worker: ['manager_provision', 'worker_boot'],
 };
 
 type SpanEvt = DiagEvent & { stage: string; proc: string; ms: number; id?: string; sid?: string; cold?: boolean };
