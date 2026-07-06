@@ -308,6 +308,30 @@ function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
     chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
   }, 1000);
 }
+// TTFT (#170): emit one uniform `span` telemetry event. summarizeTtft joins these
+// into the init→first-token timeline; `id` links a chat turn, `sid` links a
+// session's cold-start segment, `cold` (carried by send_to_route) gates whether
+// the per-sid cold-start spans attach to the turn.
+function recordSpan(
+  stage: string,
+  ms: number,
+  extra: { id?: string; sid?: string; cold?: boolean; proc?: 'ext' | 'xcsh' } = {},
+): void {
+  recordDiag('span', {
+    proc: extra.proc ?? 'ext',
+    stage,
+    ms,
+    ...(extra.id ? { id: extra.id } : {}),
+    ...(extra.sid ? { sid: extra.sid } : {}),
+    ...(extra.cold !== undefined ? { cold: extra.cold } : {}),
+  });
+}
+// sid → epoch ms of the provision nm_send, consumed once when its worker registers.
+const provisionSentAt = new Map<string, number>();
+// sids whose worker just (re)registered → the NEXT turn on that sid is a cold start.
+// Cleared by the first send_to_route that consumes it, so navigation between
+// provision and first turn can't lose the cold signal.
+const freshlyProvisioned = new Set<string>();
 // Load persisted history on (re)start, then stamp this SW start — the gap
 // between the previous last event and this sw_start reveals the suspension window.
 chrome.storage.local
@@ -602,6 +626,7 @@ function setActiveTenant(sessionKey: string | null, tabId?: number): void {
     portForTab(registry, sidForTab(tabId)) === undefined
   ) {
     nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
+    provisionSentAt.set(sidForTab(tabId), Date.now()); // TTFT: start provision_to_worker
   }
 }
 
@@ -684,6 +709,18 @@ function onMessage(msg: any, sourcePort: number): void {
   dispatchBridgeFrame(msg, {
     onPing: () => sendTo(sourcePort, { type: 'pong' }),
 
+    // Inbound xcsh timing span (Phase 2 in-band telemetry) → record as a uniform
+    // `span` event tagged proc:'xcsh'. Fail-closed on a malformed frame.
+    onSpan: (f) => {
+      if (typeof f.stage !== 'string' || typeof f.ms !== 'number') return;
+      recordSpan(f.stage, f.ms, {
+        proc: 'xcsh',
+        id: typeof f.id === 'string' ? f.id : undefined,
+        sid: typeof f.sid === 'string' ? f.sid : undefined,
+        cold: typeof f.cold === 'boolean' ? f.cold : undefined,
+      });
+    },
+
     // Identity handshake reply — record which tenant this bridge (port) serves.
     onIdentity: (frame) => {
       const plan = planHelloAck(frame, CONTRACT_VERSION);
@@ -707,6 +744,17 @@ function onMessage(msg: any, sourcePort: number): void {
         lastSeen: Date.now(),
       };
       registry.set(sourcePort, info);
+      // TTFT (#170): a worker just became registered for its per-tab sid. If a
+      // provision is pending for that sid, this is the true provision→worker-live
+      // duration; record it once and mark the sid so the next turn is tagged cold.
+      if (info.sessionId) {
+        const pAt = provisionSentAt.get(info.sessionId);
+        if (pAt !== undefined) {
+          recordSpan('provision_to_worker', Date.now() - pAt, { sid: info.sessionId });
+          provisionSentAt.delete(info.sessionId);
+          freshlyProvisioned.add(info.sessionId);
+        }
+      }
       // Bind this worker socket to the tab its per-tab sid names (validated open),
       // so tool_request from this port dispatches to that worker's OWN tab.
       correlatePortToTab(sourcePort, info.sessionId);
@@ -751,6 +799,7 @@ function onMessage(msg: any, sourcePort: number): void {
       const routedAt = turnRoutedAt.get(frame.id);
       if (routedAt !== undefined) {
         recordDiag('chat_reply', { id: frame.id, ms: Date.now() - routedAt });
+        recordSpan('route_first_token', Date.now() - routedAt, { id: frame.id }); // TTFT (#170): route→first-token envelope
         turnRoutedAt.delete(frame.id);
       }
       if (frame.type === 'chat_done' || frame.type === 'chat_error') {
@@ -924,6 +973,15 @@ chrome.runtime.onConnect.addListener((port) => {
       turnToBridgePort.set(plan.id, plan.port); // pin this turn to its origin socket
       turnRoutedAt.set(plan.id, Date.now());
       recordDiag('chat_route', { id: plan.id, tabId: diagTab, port: plan.port });
+      // TTFT (#170): the id↔sid link span. Carries the cold flag so summarizeTtft
+      // attaches this session's cold-start spans (provision_to_worker/gates) only to
+      // the FIRST turn after a fresh worker; the flag is consumed once here.
+      if (diagTab !== null) {
+        const routeSid = sidForTab(diagTab);
+        const cold = freshlyProvisioned.has(routeSid);
+        if (cold) freshlyProvisioned.delete(routeSid);
+        recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
+      }
       sendTo(plan.port, m);
       return;
     }
@@ -968,6 +1026,12 @@ chrome.runtime.onConnect.addListener((port) => {
         outcome: m.outcome,
         ...(typeof m.total === 'number' ? { total: m.total } : {}),
       });
+      // TTFT (#170): the page gate's `total` is the full cold-start activation cost
+      // for this run. Emit it as a per-sid cold-start span keyed to the panel's
+      // bound tab (m.tabId), so summarizeTtft can attach it to that tab's cold turn.
+      if (typeof m.total === 'number' && typeof m.tabId === 'number') {
+        recordSpan('gates', m.total, { sid: sidForTab(m.tabId) });
+      }
       return;
     }
     if (m.type === 'gate_blocked') {
@@ -1009,6 +1073,7 @@ chrome.runtime.onConnect.addListener((port) => {
         if (plan.kind === 'reprovision') {
           reprovisionAt.set(rsid, Date.now());
           nmSend({ type: 'provision', sessionId: rsid, tenant: rkey });
+          provisionSentAt.set(rsid, Date.now()); // TTFT: start provision_to_worker
         }
       }
       return;
@@ -2980,6 +3045,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
     if (reTenant.provisionTenant) {
       nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
+      provisionSentAt.set(reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
     }
   }
   trackTabSessionKey(tabId, activeKey2);
