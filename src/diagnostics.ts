@@ -206,3 +206,38 @@ export function extractRedirects(
   }
   return hops;
 }
+
+export interface ActivationGateSummary {
+  gate: string;
+  ms: number;
+  outcome: string;
+}
+
+export interface ActivationRun {
+  runId: number;
+  cold: boolean;
+  gates: ActivationGateSummary[];
+  /** cumulative run ms from the page-passed record, or null if the run didn't complete. */
+  total: number | null;
+  /** terminal phase = the phase of the last recorded gate. */
+  phase: string;
+}
+
+/** Group `activation` diag events into per-run summaries (per-gate ms, total,
+ *  cold/warm, terminal phase), most-recent run first. Pure: the SW stamps the
+ *  events; this only reads. Mirrors summarizeTurns / summarizeSuspension. */
+export function summarizeActivations(events: DiagEvent[], limit = 10): ActivationRun[] {
+  const byRun = new Map<number, ActivationRun>();
+  for (const e of events) {
+    if (e.event !== 'activation' || typeof e.runId !== 'number') continue;
+    let run = byRun.get(e.runId);
+    if (!run) {
+      run = { runId: e.runId, cold: e.cold === true, gates: [], total: null, phase: '' };
+      byRun.set(e.runId, run);
+    }
+    run.gates.push({ gate: String(e.gate), ms: typeof e.ms === 'number' ? e.ms : 0, outcome: String(e.outcome) });
+    if (typeof e.total === 'number') run.total = e.total;
+    if (typeof e.phase === 'string') run.phase = e.phase;
+  }
+  return [...byRun.values()].sort((a, b) => b.runId - a.runId).slice(0, limit);
+}

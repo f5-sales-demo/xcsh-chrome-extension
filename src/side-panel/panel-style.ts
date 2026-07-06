@@ -10,11 +10,12 @@ export const PANEL_CSS = `
 * { box-sizing: border-box; }
 html,body { margin:0; height:100%; }
 body { background: var(--charcoal); color: var(--bright-white);
-  font: 13px/1.5 var(--font-mono); }
+  font: 13px/1.5 var(--font-mono); position:relative; }
 /* Preact mounts into #root, so the full-height flex column must live here (not on
    body) — otherwise #root shrinks to content and the transcript's flex:1 has no
-   height to grow into, stranding the composer below empty space. */
-#root { height:100%; display:flex; flex-direction:column; }
+   height to grow into, stranding the composer below empty space. #root is also the
+   positioning context for the activation overlay (position:absolute; inset:0). */
+#root { height:100%; display:flex; flex-direction:column; position:relative; }
 .dot { width:8px; height:8px; border-radius:50%; background: var(--alert-red); }
 .dot.on { background: var(--signal-green); }
 #mode { background: var(--deep-charcoal); color: var(--bright-white); border:1px solid var(--subtle-gray);
@@ -66,4 +67,19 @@ form#composer { position:relative; display:flex; flex-direction:column; margin:2
 .modeBtn:hover { border-color: var(--f5-red); }
 .sendBtn { background: var(--f5-red); color:#fff; border-radius:6px; padding:4px 8px; }
 .sendBtn:disabled { opacity:.5; cursor:default; }
+.activation-overlay { position:absolute; inset:0; z-index:5; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:10px; background: var(--charcoal); padding:24px; }
+.activation-overlay .ov-spinner { color: var(--f5-red); font-size:20px; }
+.activation-overlay .ov-title { color: var(--bright-white); font-size:13px; letter-spacing:.04em; }
+.activation-overlay .ov-gates { list-style:none; margin:8px 0 0; padding:0; width:100%; max-width:260px; }
+.activation-overlay .ov-gate { display:flex; align-items:center; gap:8px; padding:4px 0; color: var(--dim); }
+.activation-overlay .ov-gate .ov-ico { width:14px; text-align:center; }
+.activation-overlay .ov-gate .ov-label { flex:1; }
+.activation-overlay .ov-gate .ov-ms { color: var(--cool-gray); font-size:11px; white-space:nowrap; }
+.activation-overlay .ov-passed { color: var(--bright-white); }
+.activation-overlay .ov-passed .ov-ico { color: var(--signal-green); }
+.activation-overlay .ov-active { color: var(--bright-white); }
+.activation-overlay .ov-stalled, .activation-overlay .ov-stalled .ov-ico { color: var(--alert-red); }
+.activation-overlay .ov-retry { margin-top:10px; background: var(--f5-red); color:#fff; border:none;
+  border-radius:8px; padding:6px 16px; cursor:pointer; font:inherit; }
 `;
