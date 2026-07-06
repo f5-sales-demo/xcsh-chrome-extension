@@ -41,6 +41,7 @@ import {
   sessionKeyStr,
   shouldAnnounceBind,
 } from './tab-binding';
+import { consumeColdOnRoute, consumeOnRegister, markProvisionSent, newProvisionState, reapTab } from './ttft-provision';
 import { type AxNode, matchNode, matchNodes, parseLocator } from './vendored-resolver';
 
 const DEFAULT_BRIDGE_PORT = 19222;
@@ -327,12 +328,9 @@ function recordSpan(
     ...(extra.cold !== undefined ? { cold: extra.cold } : {}),
   });
 }
-// sid → epoch ms of the provision nm_send, consumed once when its worker registers.
-const provisionSentAt = new Map<string, number>();
-// sids whose worker just (re)registered → the NEXT turn on that sid is a cold start.
-// Cleared by the first send_to_route that consumes it, so navigation between
-// provision and first turn can't lose the cold signal.
-const freshlyProvisioned = new Set<string>();
+// Per-tab cold-start provision tracking (provision→register duration + cold flag),
+// reaped on tab close. See ttft-provision.ts for the pure state machine.
+const prov = newProvisionState();
 // Load persisted history on (re)start, then stamp this SW start — the gap
 // between the previous last event and this sw_start reveals the suspension window.
 chrome.storage.local
@@ -627,7 +625,7 @@ function setActiveTenant(sessionKey: string | null, tabId?: number): void {
     portForTab(registry, sidForTab(tabId)) === undefined
   ) {
     nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
-    provisionSentAt.set(sidForTab(tabId), Date.now()); // TTFT: start provision_to_worker
+    markProvisionSent(prov, sidForTab(tabId), Date.now()); // TTFT: start provision_to_worker
   }
 }
 
@@ -746,15 +744,12 @@ function onMessage(msg: any, sourcePort: number): void {
       };
       registry.set(sourcePort, info);
       // TTFT (#170): a worker just became registered for its per-tab sid. If a
-      // provision is pending for that sid, this is the true provision→worker-live
-      // duration; record it once and mark the sid so the next turn is tagged cold.
+      // provision is pending for that sid (and not stale), this is the true
+      // provision→worker-live duration; record it once and mark the sid so the next
+      // turn is tagged cold.
       if (info.sessionId) {
-        const pAt = provisionSentAt.get(info.sessionId);
-        if (pAt !== undefined) {
-          recordSpan('provision_to_worker', Date.now() - pAt, { sid: info.sessionId });
-          provisionSentAt.delete(info.sessionId);
-          freshlyProvisioned.add(info.sessionId);
-        }
+        const ms = consumeOnRegister(prov, info.sessionId, Date.now());
+        if (ms !== null) recordSpan('provision_to_worker', ms, { sid: info.sessionId });
       }
       // Bind this worker socket to the tab its per-tab sid names (validated open),
       // so tool_request from this port dispatches to that worker's OWN tab.
@@ -979,8 +974,7 @@ chrome.runtime.onConnect.addListener((port) => {
       // the FIRST turn after a fresh worker; the flag is consumed once here.
       if (diagTab !== null) {
         const routeSid = sidForTab(diagTab);
-        const cold = freshlyProvisioned.has(routeSid);
-        if (cold) freshlyProvisioned.delete(routeSid);
+        const cold = consumeColdOnRoute(prov, routeSid);
         recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
       }
       sendTo(plan.port, m);
@@ -1074,7 +1068,7 @@ chrome.runtime.onConnect.addListener((port) => {
         if (plan.kind === 'reprovision') {
           reprovisionAt.set(rsid, Date.now());
           nmSend({ type: 'provision', sessionId: rsid, tenant: rkey });
-          provisionSentAt.set(rsid, Date.now()); // TTFT: start provision_to_worker
+          markProvisionSent(prov, rsid, Date.now()); // TTFT: start provision_to_worker
         }
       }
       return;
@@ -3053,7 +3047,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
     if (reTenant.provisionTenant) {
       nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
-      provisionSentAt.set(reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
+      markProvisionSent(prov, reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
     }
   }
   trackTabSessionKey(tabId, activeKey2);
@@ -3065,6 +3059,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   latestApiCapture.delete(tabId);
   tabSessionKeys.delete(tabId);
+  reapTab(prov, sidForTab(tabId)); // drop any pending TTFT provision/cold state for this tab
   clearPortForTab(tabId); // drop this tab's socket→tab binding
   const a = decideBinding(bindingState(), { kind: 'removed', tabId });
   if (a.action === 'unbind') await setControlledTab(undefined);
