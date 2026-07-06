@@ -6,13 +6,8 @@ export interface PanelState {
   conv: Conversation;
   connected: boolean;
   attachContext: boolean;
-  panelInactive: boolean;
-  inputBlocked: boolean;
   contextMeta: { title?: string; path?: string } | null;
   sessionLabel: string;
-  /** The focused tab's worker is being provisioned (spawn→bind window): show a
-   *  transient "starting xcsh…" instead of the actionable "no xcsh" block (#180). */
-  provisioning: boolean;
   /** Tab-activation readiness gate state (bridge/worker/page) + derived phase. */
   activation: ActivationState;
   active: { id: string; msgId: string; state: ChatTurnState } | null;
@@ -23,11 +18,8 @@ export function initPanelState(conv: Conversation): PanelState {
     conv,
     connected: false,
     attachContext: true,
-    panelInactive: false,
-    inputBlocked: false,
     contextMeta: null,
     sessionLabel: '',
-    provisioning: false,
     activation: initActivation(),
     active: null,
   };
@@ -36,10 +28,6 @@ export function initPanelState(conv: Conversation): PanelState {
 export type PanelAction =
   | { type: 'set_conv'; conv: Conversation }
   | { type: 'connected'; on: boolean }
-  | { type: 'set_inactive'; label: string }
-  | { type: 'set_active_tenant'; label: string }
-  | { type: 'input_blocked'; blocked: boolean }
-  | { type: 'set_provisioning'; on: boolean }
   | { type: 'set_activation'; activation: ActivationState }
   | { type: 'set_session_label'; label: string }
   | { type: 'toggle_context' }
@@ -56,15 +44,6 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
       return { ...s, conv: a.conv };
     case 'connected':
       return { ...s, connected: a.on };
-    case 'set_inactive':
-      return { ...s, panelInactive: true, sessionLabel: a.label };
-    case 'set_active_tenant':
-      // Worker is live for this tab → clear any pending provisioning indicator.
-      return { ...s, panelInactive: false, sessionLabel: a.label, provisioning: false };
-    case 'input_blocked':
-      return { ...s, inputBlocked: a.blocked };
-    case 'set_provisioning':
-      return { ...s, provisioning: a.on };
     case 'set_activation':
       return { ...s, activation: a.activation };
     case 'set_session_label':
