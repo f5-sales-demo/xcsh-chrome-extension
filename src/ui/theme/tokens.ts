@@ -25,7 +25,56 @@ export const GLYPHS = {
   thinkingLevels: ['◔', '◑', '◒', '◕', '◉'],
 } as const;
 
-export const FONT_STACK = "'JetBrains Mono', ui-monospace, Menlo, monospace";
+// MesloLGS NF — the Powerlevel10k single-width Nerd Font, bundled under
+// `dist/fonts/` (see `injectFontFaces`) so the chat window reads exactly like an
+// iTerm2 terminal (glyph coverage for the powerline separators + terminal icons).
+// The named fallbacks cover the brief `font-display:swap` window and any surface
+// where the face failed to register.
+export const FONT_STACK = "'MesloLGS NF', 'JetBrains Mono', ui-monospace, Menlo, monospace";
+
+/** The four bundled MesloLGS NF weights. Family name matches the installed
+ * iTerm2 font so it renders identically. Paths are extension-relative and are
+ * resolved to absolute `chrome-extension://` URLs by `defaultFontUrl`. */
+const FONT_FACES = [
+  { file: 'fonts/MesloLGS-NF-Regular.ttf', weight: 'normal', style: 'normal' },
+  { file: 'fonts/MesloLGS-NF-Bold.ttf', weight: 'bold', style: 'normal' },
+  { file: 'fonts/MesloLGS-NF-Italic.ttf', weight: 'normal', style: 'italic' },
+  { file: 'fonts/MesloLGS-NF-Bold-Italic.ttf', weight: 'bold', style: 'italic' },
+] as const;
+
+const FONTFACE_ID = 'xcsh-fontface';
+
+/** Default resolver: an extension-relative path → absolute `chrome-extension://`
+ * URL. Content scripts inject the font-face into the *host page's* document, so a
+ * relative URL would resolve against the page origin and 404 — `getURL` pins it to
+ * the extension origin (and the file must be in `web_accessible_resources`).
+ * Guarded so importing this module in unit tests (no `chrome`) never throws. */
+function defaultFontUrl(path: string): string {
+  return typeof chrome !== 'undefined' && chrome.runtime?.getURL ? chrome.runtime.getURL(path) : path;
+}
+
+/** The `@font-face` block registering all bundled MesloLGS NF weights. */
+export function fontFaceCss(getUrl: (p: string) => string = defaultFontUrl): string {
+  return FONT_FACES.map(
+    (f) =>
+      `@font-face { font-family: 'MesloLGS NF'; font-style: ${f.style}; font-weight: ${f.weight};` +
+      ` font-display: swap; src: url('${getUrl(f.file)}') format('truetype'); }`,
+  ).join('\n');
+}
+
+/** Register the bundled Nerd Font once (idempotent) at the DOCUMENT level.
+ * `@font-face` rules do NOT resolve inside a ShadowRoot, so — unlike
+ * `injectTokens` — this only ever targets a Document's `<head>`: the side-panel /
+ * options pages, and (for the Shadow-DOM on-page overlays) the host page document,
+ * whose faces the shadow trees then inherit. */
+export function injectFontFaces(doc: Document, getUrl: (p: string) => string = defaultFontUrl): void {
+  const head = doc.head ?? doc.documentElement;
+  if (!head || head.querySelector(`#${FONTFACE_ID}`)) return;
+  const style = doc.createElement('style');
+  style.id = FONTFACE_ID;
+  style.textContent = fontFaceCss(getUrl);
+  head.append(style);
+}
 
 function kebab(k: string): string {
   return k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);

@@ -65,6 +65,14 @@ for (const s of [16, 48, 128]) {
   fs.copyFileSync(`icons/icon-${s}.png`, `dist/icons/icon-${s}.png`);
 }
 
+// Copy the bundled MesloLGS Nerd Font weights so `@font-face` (injected via
+// `injectFontFaces`) resolves them at chrome-extension://…/fonts/. Declared in
+// manifest `web_accessible_resources` so the content-script surfaces can load them too.
+fs.mkdirSync('dist/fonts', { recursive: true });
+for (const w of ['Regular', 'Bold', 'Italic', 'Bold-Italic']) {
+  fs.copyFileSync(`assets/fonts/MesloLGS-NF-${w}.ttf`, `dist/fonts/MesloLGS-NF-${w}.ttf`);
+}
+
 const sz = fs.statSync('dist/side-panel.js').size;
 console.log(`side-panel.js: ${(sz / 1024).toFixed(1)} KB`);
 

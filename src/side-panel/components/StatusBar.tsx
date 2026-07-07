@@ -7,12 +7,18 @@ import { COLORS } from '../../ui/theme/tokens';
  * and git segments and show only surface-appropriate signals:
  *   left  → context% (model context-window usage; a teal→red gradient)
  *   right → the session identity (tenant·env) in F5 red, right-aligned
- * Segments bleed with ▶ / ◀ caps colored by their own background (the plain-
- * Unicode powerline fallback — renders without a Nerd font). Colors are
- * transcribed from xcsh/.../theme/defaults/xcsh-dark.json + the context gradient.
+ * Segments bleed with the true powerline caps (U+E0B0 / U+E0B2) colored by
+ * their own background — they render as seamless slanted separators in the bundled
+ * MesloLGS Nerd Font (see `injectFontFaces`), matching the iTerm2/p10k statusline.
+ * Colors are transcribed from xcsh/.../theme/defaults/xcsh-dark.json + the gradient.
  */
 
 const SESSION_FG = '#ffffff';
+
+// Powerline separator caps from the Nerd Font private-use area, built via codepoint
+// so the source stays pure ASCII (no raw PUA bytes for linters/editors to mangle).
+const SEP_R = String.fromCodePoint(0xe0b0); // right-pointing slanted cap (trailing edge)
+const SEP_L = String.fromCodePoint(0xe0b2); // left-pointing slanted cap (leading edge)
 
 // 21-step context-usage gradient (blue → teal → green → amber → red → purple).
 // Pick the highest step whose pct ≤ value (floor to nearest 5), exactly as the CLI.
@@ -60,7 +66,7 @@ export function StatusBar({ contextPct, sessionLabel }: { contextPct: number | n
         <span class="seg seg-context" style={{ background: g.bg, color: g.fg }}>
           {Math.round(contextPct as number)}%
           <span class="sep-r" style={{ color: g.bg }}>
-            ▶
+            {SEP_R}
           </span>
         </span>
       )}
@@ -68,7 +74,7 @@ export function StatusBar({ contextPct, sessionLabel }: { contextPct: number | n
       {sessionLabel && (
         <span class="seg seg-session" style={{ background: COLORS.f5Red, color: SESSION_FG }}>
           <span class="sep-l" style={{ color: COLORS.f5Red }}>
-            ◀
+            {SEP_L}
           </span>
           {sessionLabel}
         </span>
