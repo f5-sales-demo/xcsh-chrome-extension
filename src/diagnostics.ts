@@ -274,6 +274,7 @@ const TTFT_STAGE_ORDER = [
   'provision_to_worker',
   'gates',
   'send_to_route',
+  'session_build',
   'chat_handler',
   'provider_ttft',
   'route_first_token',
