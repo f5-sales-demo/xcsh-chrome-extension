@@ -23,6 +23,28 @@ describe('chrome components', () => {
     expect(container.querySelector('.seg-git')).toBeNull();
   });
 
+  it('powerline caps are colored CSS-triangle boxes, not Nerd Font glyphs', () => {
+    const { container } = render(<StatusBar contextPct={42} sessionLabel="acme·production" />);
+    const capR = container.querySelector('.seg-context .sep-r') as HTMLElement;
+    const capL = container.querySelector('.seg-session .sep-l') as HTMLElement;
+    expect(capR).toBeTruthy();
+    expect(capL).toBeTruthy();
+    // Caps are pure shapes now (clip-path in CSS): the segment color drives them
+    // via `background`, and they carry NO powerline PUA glyph text — that font-
+    // metric-dependent approach rendered the cap at 1.32x the bar height (#213).
+    expect(capR.textContent).toBe('');
+    expect(capL.textContent).toBe('');
+    expect(capR.style.background).not.toBe('');
+    expect(capL.style.background).not.toBe('');
+    // No leftover U+E0B0/E0B2 powerline glyphs anywhere in the bar (checked by
+    // codepoint so this source stays pure-ASCII, per the StatusBar convention).
+    const hasPua = [...(container.textContent ?? '')].some((c) => {
+      const cp = c.codePointAt(0);
+      return cp === 0xe0b0 || cp === 0xe0b2;
+    });
+    expect(hasPua).toBe(false);
+  });
+
   it('composer sends trimmed text and clears', () => {
     let sent = '';
     const { container, getByPlaceholderText } = render(

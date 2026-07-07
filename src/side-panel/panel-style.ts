@@ -46,11 +46,13 @@ code { background:#05070a; padding:1px 5px; border-radius:4px; }
    separate bar above it: absolutely positioned so its chips straddle the frame. */
 .statusbar { position:absolute; top:-11px; left:12px; right:12px; display:flex; align-items:center; height:20px; font-size:11px; }
 .statusbar .seg { position:relative; display:flex; align-items:center; height:20px; padding:2px 10px; white-space:nowrap; }
-/* Powerline caps (U+E0B0 / U+E0B2): sized to the segment height so the slanted glyph spans
-   the full 20px and its advance (~0.6em) sticks exactly one cell past the segment
-   edge, butting seamlessly against the neighbour. font-size drives both. */
-.statusbar .sep-r { position:absolute; right:-0.6em; top:0; z-index:1; font-size:20px; line-height:20px; }
-.statusbar .sep-l { position:absolute; left:-0.6em; top:0; z-index:1; font-size:20px; line-height:20px; }
+/* Powerline caps: CSS clip-path triangles sized to EXACTLY the segment height
+   (height:100% of the 20px .seg), each filled with its segment's own background so
+   the chip bleeds into a seamless slanted point. Width 9.4px is the measured MesloLGS
+   powerline slope (glyph inkW/inkH ~= 0.47) at 20px, so it reads identically to the
+   iTerm2 cap while being immune to the font glyph's 1.32x ink overscan. See #213. */
+.statusbar .sep-r { position:absolute; right:-9.4px; top:0; height:100%; width:9.4px; z-index:1; clip-path:polygon(0 0, 100% 50%, 0 100%); }
+.statusbar .sep-l { position:absolute; left:-9.4px; top:0; height:100%; width:9.4px; z-index:1; clip-path:polygon(100% 0, 0 50%, 100% 100%); }
 .seg-spacer { flex:1; }
 /* Composer — the shared "InputBar" look: a rounded, red-bordered box holding the
    editor on top and a footer toolbar (mode pill + icon send) below. Radius scale

@@ -9,7 +9,8 @@
     "watch:dev": "node scripts/dev-watch.mjs",
     "test": "bun test",
     "check:types": "tsc --noEmit",
-    "uat:overlay": "bun run build:dev && node test/uat/overlay-render.mjs"
+    "uat:overlay": "bun run build:dev && node test/uat/overlay-render.mjs",
+    "uat:statusbar": "bun test/uat/statusbar-powerline.mjs"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.10.6",
