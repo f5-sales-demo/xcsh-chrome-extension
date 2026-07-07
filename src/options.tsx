@@ -7,7 +7,7 @@
 
 import { render } from 'preact';
 import { Options } from './options/App';
-import { injectTokens } from './ui/theme/tokens';
+import { injectFontFaces, injectTokens } from './ui/theme/tokens';
 
 /** Terminal-themed styling (uses the injected token custom properties). */
 const OPTIONS_CSS = `
@@ -28,6 +28,7 @@ const OPTIONS_CSS = `
 `;
 
 injectTokens(document);
+injectFontFaces(document);
 const style = document.createElement('style');
 style.textContent = OPTIONS_CSS;
 document.head.append(style);

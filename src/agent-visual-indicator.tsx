@@ -29,7 +29,12 @@ import { render } from 'preact';
 import { F5_LOGO_DATA_URI } from './f5-logo';
 import { createEnvelope, type EnvelopeEffects } from './indicator-envelope';
 import { showOverlay } from './overlays';
-import { COLORS } from './ui/theme/tokens';
+import { COLORS, FONT_STACK, injectFontFaces } from './ui/theme/tokens';
+
+// Register the bundled MesloLGS NF at the HOST PAGE's document level so the
+// Shadow-DOM badge/overlays (whose `@font-face` rules would be ignored inside the
+// shadow root) inherit the face. Cheap, idempotent; runs once per matched page.
+injectFontFaces(document);
 
 const SCANNER_ID = '__xcsh-agent-scanner';
 const BADGE_ID = '__xcsh-agent-badge';
@@ -87,7 +92,7 @@ function ScannerBar() {
 function StopBadge() {
   const css =
     '*{box-sizing:border-box}button{all:unset}' +
-    `.eff{display:inline-flex;align-items:center;gap:8px;background:#0a0d11;border:1.5px solid ${RED};border-radius:9px;padding:6px 12px 6px 8px;box-shadow:0 6px 16px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.45),0 0 12px rgba(202,38,10,.4);font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;cursor:pointer;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}` +
+    `.eff{display:inline-flex;align-items:center;gap:8px;background:#0a0d11;border:1.5px solid ${RED};border-radius:9px;padding:6px 12px 6px 8px;box-shadow:0 6px 16px rgba(0,0,0,.5),0 2px 5px rgba(0,0,0,.45),0 0 12px rgba(202,38,10,.4);font-family:${FONT_STACK};cursor:pointer;transition:border-color 120ms ease-out,box-shadow 120ms ease-out}` +
     `.eff:hover{border-color:#e8330f;box-shadow:0 8px 20px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.5),0 0 18px rgba(202,38,10,.6)}` +
     '.eff img{display:block;width:24px;height:24px}' +
     `.eff .w{font-weight:800;letter-spacing:1px;font-size:15px;text-transform:none;color:${RED}}`;

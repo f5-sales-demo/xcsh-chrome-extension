@@ -46,8 +46,11 @@ code { background:#05070a; padding:1px 5px; border-radius:4px; }
    separate bar above it: absolutely positioned so its chips straddle the frame. */
 .statusbar { position:absolute; top:-11px; left:12px; right:12px; display:flex; align-items:center; height:20px; font-size:11px; }
 .statusbar .seg { position:relative; display:flex; align-items:center; height:20px; padding:2px 10px; white-space:nowrap; }
-.statusbar .sep-r { position:absolute; right:-0.55em; top:0; z-index:1; }
-.statusbar .sep-l { position:absolute; left:-0.55em; top:0; z-index:1; }
+/* Powerline caps (U+E0B0 / U+E0B2): sized to the segment height so the slanted glyph spans
+   the full 20px and its advance (~0.6em) sticks exactly one cell past the segment
+   edge, butting seamlessly against the neighbour. font-size drives both. */
+.statusbar .sep-r { position:absolute; right:-0.6em; top:0; z-index:1; font-size:20px; line-height:20px; }
+.statusbar .sep-l { position:absolute; left:-0.6em; top:0; z-index:1; font-size:20px; line-height:20px; }
 .seg-spacer { flex:1; }
 /* Composer — the shared "InputBar" look: a rounded, red-bordered box holding the
    editor on top and a footer toolbar (mode pill + icon send) below. Radius scale

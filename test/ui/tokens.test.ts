@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { COLORS, cssVars, GLYPHS, injectTokens } from '../../src/ui/theme/tokens';
+import { COLORS, cssVars, fontFaceCss, GLYPHS, injectFontFaces, injectTokens } from '../../src/ui/theme/tokens';
 
 describe('theme tokens', () => {
   it('carries the xcsh F5 palette', () => {
@@ -17,6 +17,23 @@ describe('theme tokens', () => {
     const css = cssVars();
     expect(css).toContain('--f5-red: #ca260a');
     expect(css).toContain('--deep-charcoal: #0f1216');
+  });
+  it('sets the terminal font stack to the bundled Nerd Font', () => {
+    expect(cssVars()).toContain("--font-mono: 'MesloLGS NF'");
+  });
+  it('builds one @font-face per bundled weight via the url resolver', () => {
+    const css = fontFaceCss((p) => `RESOLVED/${p}`);
+    expect((css.match(/@font-face/g) ?? []).length).toBe(4);
+    expect(css).toContain("font-family: 'MesloLGS NF'");
+    expect(css).toContain("src: url('RESOLVED/fonts/MesloLGS-NF-Regular.ttf')");
+    expect(css).toContain('font-style: italic');
+    expect(css).toContain('font-weight: bold');
+  });
+  it('registers the bundled font faces once at the document level', () => {
+    injectFontFaces(document, (p) => p);
+    injectFontFaces(document, (p) => p);
+    expect(document.head.querySelectorAll('#xcsh-fontface').length).toBe(1);
+    expect(document.head.querySelector('#xcsh-fontface')?.textContent).toContain('@font-face');
   });
   it('injects a single token stylesheet idempotently into a ShadowRoot', () => {
     const shadow = document.createElement('div').attachShadow({ mode: 'open' });
