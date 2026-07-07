@@ -55,9 +55,11 @@ export default {
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
           "node scripts/set-version.mjs ${nextRelease.version} && bun install --frozen-lockfile && bun run build && (cd dist && zip -r ../xcsh-chrome-extension.zip . -x '*.DS_Store')",
         // Upload + publish to the Chrome Web Store. publish-cws.mjs fails the
-        // release on real errors (bad credentials, wrong EXTENSION_ID, network)
-        // and tolerates only the transient case — a previous submission still in
-        // review (ITEM_NOT_UPDATABLE) — which publishes once review clears.
+        // release loudly on ANY failure (bad credentials, wrong EXTENSION_ID,
+        // network, or an item locked by an in-review / ready-to-publish draft):
+        // a version that did not go live is never reported as shipped. See
+        // issue #211 for why the previous "defer a publish lock as success"
+        // behavior silently wedged the pipeline.
         publishCmd:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
           'node scripts/publish-cws.mjs ${nextRelease.version}',
@@ -74,8 +76,12 @@ export default {
     ],
     // No @semantic-release/git: the released version lives in the git tag +
     // GitHub release + the published CWS package, NOT in a bot-commit to main.
-    // The build sets the version at release time (set-version.mjs). This keeps
-    // main clean and ensures the tag is only created on a SUCCESSFUL publish
-    // (so a failed CWS upload never leaves a dangling tag/commit).
+    // The build sets the version at release time (set-version.mjs), keeping
+    // main clean.
+    //
+    // NOTE: semantic-release creates and pushes the version tag BEFORE running
+    // these publish plugins, so a failed CWS publish WOULD leave a dangling
+    // tag. publish-cws.mjs deletes that tag on any failure (see cws-lib.mjs)
+    // so the git version never drifts ahead of the shipped CWS version.
   ],
 };
