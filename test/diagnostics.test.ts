@@ -428,6 +428,16 @@ describe('summarizeTtft', () => {
     expect(t.total).toBe(5 + 800 + 40 + 3 + 380);
   });
 
+  it('orders the session_build stage between worker_boot and chat_handler', () => {
+    const t = summarizeTtft([
+      span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
+      span('chat_handler', 12, { id: 'c-1', sid: 'tab-7', proc: 'xcsh' }),
+      span('session_build', 900, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
+      span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
+    ])!;
+    expect(t.stages.map((s) => s.stage)).toEqual(['worker_boot', 'send_to_route', 'session_build', 'chat_handler']);
+  });
+
   it('keeps provision_to_worker when only one xcsh child is present (partial)', () => {
     const t = summarizeTtft([
       span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
