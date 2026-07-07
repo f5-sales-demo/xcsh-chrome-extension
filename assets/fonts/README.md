@@ -22,6 +22,6 @@ for every user regardless of what monospace fonts they have installed.
 Both licenses permit redistribution with attribution. This file provides that attribution;
 the font binaries are unmodified copies of the upstream MesloLGS NF release.
 
-- Meslo LG: https://github.com/andreberg/Meslo-Font
-- Nerd Fonts: https://github.com/ryanoasis/nerd-fonts
-- MesloLGS NF (canonical build): https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k
+- Meslo LG: <https://github.com/andreberg/Meslo-Font>
+- Nerd Fonts: <https://github.com/ryanoasis/nerd-fonts>
+- MesloLGS NF (canonical build): <https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k>
