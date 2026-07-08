@@ -293,6 +293,13 @@ describe('summarizeActivations', () => {
 describe('summarizeTtft', () => {
   const span = (stage: string, ms: number, over: Record<string, unknown> = {}) =>
     ({ t: 0, event: 'span', proc: 'ext', stage, ms, ...over }) as const;
+  // summarizeTtft returns the decoded turn or null; these cases always expect a
+  // turn, so narrow via a helper that fails loudly (instead of a `!` assertion).
+  const ttft = (spans: Parameters<typeof summarizeTtft>[0]) => {
+    const t = summarizeTtft(spans);
+    if (!t) throw new Error('expected summarizeTtft to return a turn');
+    return t;
+  };
 
   it('returns null with no spans, or when no span carries a turn id', () => {
     expect(summarizeTtft([{ t: 0, event: 'keepalive' }])).toBeNull();
@@ -300,13 +307,13 @@ describe('summarizeTtft', () => {
   });
 
   it('joins a turn to its session cold-start via the send_to_route link, ordered canonically', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('sw_to_ws', 30, { sid: 'tab-7' }),
       span('provision_to_worker', 500, { sid: 'tab-7', cold: true }),
       span('gates', 40, { sid: 'tab-7' }),
       span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
       span('route_first_token', 380, { id: 'c-1' }),
-    ])!;
+    ]);
     expect([t.turnId, t.sid, t.cold]).toEqual(['c-1', 'tab-7', true]);
     expect(t.stages.map((s) => s.stage)).toEqual([
       'sw_to_ws',
@@ -320,12 +327,12 @@ describe('summarizeTtft', () => {
   });
 
   it('interleaves xcsh spans and drops the route_first_token envelope when its children are present', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('send_to_route', 2, { id: 'c-9', sid: 'tab-3', cold: false }),
       span('chat_handler', 12, { id: 'c-9', proc: 'xcsh' }),
       span('provider_ttft', 300, { id: 'c-9', proc: 'xcsh' }),
       span('route_first_token', 320, { id: 'c-9' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => `${s.proc}:${s.stage}`)).toEqual([
       'ext:send_to_route',
       'xcsh:chat_handler',
@@ -337,11 +344,11 @@ describe('summarizeTtft', () => {
   });
 
   it('keeps the envelope when its decomposition is only partial (one child missing)', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('send_to_route', 2, { id: 'c-4', sid: 'tab-8', cold: false }),
       span('chat_handler', 12, { id: 'c-4', proc: 'xcsh' }),
       span('route_first_token', 320, { id: 'c-4' }),
-    ])!;
+    ]);
     // provider_ttft is absent, so route_first_token still captures its latency and is kept.
     expect(t.stages.map((s) => s.stage)).toEqual(['send_to_route', 'chat_handler', 'route_first_token']);
     expect(t.total).toBe(334);
@@ -349,17 +356,17 @@ describe('summarizeTtft', () => {
   });
 
   it('keeps route_first_token as a leaf in Phase 1 when its xcsh children are absent', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('send_to_route', 2, { id: 'c-5', sid: 'tab-2' }),
       span('route_first_token', 410, { id: 'c-5' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toEqual(['send_to_route', 'route_first_token']);
     expect(t.total).toBe(412);
     expect(t.dominant).toBe('route_first_token');
   });
 
   it('does not attach a session cold-start to a later WARM turn sharing the same sid', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       // cold turn c-1 established session tab-7 (its send_to_route is cold)
       span('provision_to_worker', 500, { sid: 'tab-7', cold: true }),
       span('gates', 40, { sid: 'tab-7' }),
@@ -368,7 +375,7 @@ describe('summarizeTtft', () => {
       // later warm turn c-2 reuses the same session tab-7
       span('send_to_route', 2, { id: 'c-2', sid: 'tab-7', cold: false }),
       span('route_first_token', 120, { id: 'c-2' }),
-    ])!;
+    ]);
     expect(t.turnId).toBe('c-2');
     expect(t.cold).toBe(false);
     // warm turn must NOT inherit tab-7's cold-start spans (provision_to_worker/gates)
@@ -378,12 +385,12 @@ describe('summarizeTtft', () => {
 
   it('picks the most recent turn when several are present', () => {
     expect(
-      summarizeTtft([
+      ttft([
         span('send_to_route', 1, { id: 'c-1', sid: 'tab-1' }),
         span('route_first_token', 100, { id: 'c-1' }),
         span('send_to_route', 1, { id: 'c-2', sid: 'tab-2' }),
         span('route_first_token', 200, { id: 'c-2' }),
-      ])!.turnId,
+      ]).turnId,
     ).toBe('c-2');
   });
 
@@ -391,33 +398,33 @@ describe('summarizeTtft', () => {
     // The nearest reachable state to the (removed) `stages.length === 0` guard:
     // only route_first_token + its full decomposition, no other spans. Dropping the
     // envelope still leaves the two children, so the result is never null.
-    const t = summarizeTtft([
+    const t = ttft([
       span('chat_handler', 12, { id: 'c-7', proc: 'xcsh' }),
       span('provider_ttft', 300, { id: 'c-7', proc: 'xcsh' }),
       span('route_first_token', 320, { id: 'c-7' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toEqual(['chat_handler', 'provider_ttft']);
     expect(t.total).toBe(312);
   });
 
   it('treats a span with no ms as 0 (the ?: 0 fallback)', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       { t: 0, event: 'span', proc: 'ext', stage: 'send_to_route', id: 'c-8', sid: 'tab-1' },
       { t: 0, event: 'span', proc: 'ext', stage: 'route_first_token', id: 'c-8' },
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.ms)).toEqual([0, 0]);
     expect(t.total).toBe(0);
   });
 
   it('drops the provision_to_worker envelope when its xcsh children are present', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('manager_provision', 5, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
       span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
       span('provision_to_worker', 830, { sid: 'tab-7' }),
       span('gates', 40, { sid: 'tab-7' }),
       span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
       span('route_first_token', 380, { id: 'c-1' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toEqual([
       'manager_provision',
       'worker_boot',
@@ -429,22 +436,22 @@ describe('summarizeTtft', () => {
   });
 
   it('orders the session_build stage between worker_boot and chat_handler', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
       span('chat_handler', 12, { id: 'c-1', sid: 'tab-7', proc: 'xcsh' }),
       span('session_build', 900, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
       span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toEqual(['worker_boot', 'send_to_route', 'session_build', 'chat_handler']);
   });
 
   it('keeps provision_to_worker when only one xcsh child is present (partial)', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('worker_boot', 800, { sid: 'tab-7', cold: true, proc: 'xcsh' }),
       span('provision_to_worker', 830, { sid: 'tab-7' }),
       span('send_to_route', 3, { id: 'c-1', sid: 'tab-7', cold: true }),
       span('route_first_token', 380, { id: 'c-1' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toEqual([
       'worker_boot',
       'provision_to_worker',
@@ -454,25 +461,25 @@ describe('summarizeTtft', () => {
   });
 
   it('reports cold=false for a warm-adopt establishing turn but still attaches its cold-start spans', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('manager_provision', 2, { sid: 'tab-9', cold: false, proc: 'xcsh' }),
       span('worker_boot', 5, { sid: 'tab-9', cold: false, proc: 'xcsh' }),
       span('provision_to_worker', 12, { sid: 'tab-9' }),
       span('send_to_route', 1, { id: 'c-1', sid: 'tab-9', cold: true }),
       span('route_first_token', 300, { id: 'c-1' }),
-    ])!;
+    ]);
     expect(t.stages.map((s) => s.stage)).toContain('worker_boot');
     expect(t.stages.map((s) => s.stage)).toContain('manager_provision');
     expect(t.cold).toBe(false);
   });
 
   it('reports cold=true when the xcsh cold-start span is a cold spawn', () => {
-    const t = summarizeTtft([
+    const t = ttft([
       span('manager_provision', 5, { sid: 'tab-3', cold: true, proc: 'xcsh' }),
       span('worker_boot', 800, { sid: 'tab-3', cold: true, proc: 'xcsh' }),
       span('send_to_route', 1, { id: 'c-1', sid: 'tab-3', cold: true }),
       span('route_first_token', 300, { id: 'c-1' }),
-    ])!;
+    ]);
     expect(t.cold).toBe(true);
   });
 });
