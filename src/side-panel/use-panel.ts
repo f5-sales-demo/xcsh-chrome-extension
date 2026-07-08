@@ -32,12 +32,25 @@ import {
 import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
 import { sessionKeyFromUrl, sessionKeyStr } from '../tab-binding';
 import { PortBus } from '../ui/bus';
-import { type ActivationEvent, activationReducer, GATES, type GateName, newlyResolvedGates } from './activation';
+import {
+  type ActivationEvent,
+  activationReducer,
+  GATES,
+  type GateName,
+  newlyResolvedGates,
+  shouldAutoRetryWorkerGate,
+} from './activation';
 import { abortInfo, composerPlaceholder, contextChipText, initPanelState, inputLocked, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
 const BRIDGE_TIMEOUT_MS = 10_000; // hard gate: host unreachable
 const WORKER_TIMEOUT_MS = 15_000; // hard gate: worker never bound (was PROVISION_TIMEOUT_MS, #180)
+// A COLD start — no live worker yet — must cover an upgrade/recycle handoff (old
+// manager graceful-shutdown → fresh chrome-host → fresh manager → cold worker spawn),
+// which routinely exceeds the flat 15s. Larger budget + a bounded auto-retry so a
+// legitimate recycle never surfaces "xcsh didn't start" + a manual Retry (#upgrade-recycle).
+const WORKER_COLD_TIMEOUT_MS = 30_000;
+const MAX_WORKER_AUTO_RETRIES = 1; // cold gate stalls → auto-retry this many times before manual Retry
 const PAGE_TIMEOUT_MS = 5_000; // soft gate: no fresh snapshot → degraded-ready
 const now = () => Date.now();
 
@@ -60,6 +73,9 @@ export function usePanel() {
   // cleared. `used` guarantees ONE automatic resend — a second failure falls through
   // to the per-message Retry button.
   const pendingResend = useRef<{ text: string; used: boolean } | null>(null);
+  // Bounded auto-retries of a stalled COLD worker gate (upgrade/recycle handoff);
+  // reset at the start of each activation run.
+  const workerAutoRetries = useRef(0);
   const gateTimers = useRef<Record<GateName, ReturnType<typeof setTimeout> | null>>({
     bridge: null,
     worker: null,
@@ -143,10 +159,24 @@ export function usePanel() {
         BRIDGE_TIMEOUT_MS,
       );
     } else if (active === 'worker') {
-      gateTimers.current.worker = setTimeout(
-        () => fireActivation({ kind: 'timeout', gate: 'worker' }),
-        WORKER_TIMEOUT_MS,
-      );
+      // Cold start (no live worker at reset) covers an upgrade/recycle handoff → a
+      // larger budget; warm re-checks keep the tight 15s. On a cold stall, auto-retry
+      // a bounded number of times (re-activates the gate → re-posts gate_blocked → SW
+      // re-provisions) before surfacing the manual "xcsh didn't start" Retry.
+      const budget = next.cold ? WORKER_COLD_TIMEOUT_MS : WORKER_TIMEOUT_MS;
+      gateTimers.current.worker = setTimeout(() => {
+        fireActivation({ kind: 'timeout', gate: 'worker' });
+        if (
+          shouldAutoRetryWorkerGate({
+            cold: next.cold,
+            attempts: workerAutoRetries.current,
+            maxAttempts: MAX_WORKER_AUTO_RETRIES,
+          })
+        ) {
+          workerAutoRetries.current += 1;
+          fireActivation({ kind: 'retry' }); // re-activate worker gate → re-arm + re-post gate_blocked
+        }
+      }, budget);
       // #182/#183: a workerless tab drives the SW's rate-limited re-provision.
       if (boundTabId.current !== undefined && boundSessionKey.current)
         bus.post({ type: 'gate_blocked', tabId: boundTabId.current, key: boundSessionKey.current });
@@ -180,6 +210,7 @@ export function usePanel() {
     boundTabId.current = tabId;
     boundSessionKey.current = keyStr;
     pageRequestedForRun.current = -1;
+    workerAutoRetries.current = 0; // fresh run → fresh auto-retry budget
     const [tenant, env] = keyStr.split('|');
     dispatch({ type: 'set_session_label', label: `${tenant}·${env}` });
     const workerLive = liveTenants.current.some((tt) => tt.tenant === keyStr);

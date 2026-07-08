@@ -7,6 +7,7 @@ import {
   GATES,
   initActivation,
   newlyResolvedGates,
+  shouldAutoRetryWorkerGate,
 } from '../../src/side-panel/activation';
 
 const reset = (over: Partial<{ tenant: boolean; cold: boolean; connected: boolean; workerLive: boolean }> = {}) =>
@@ -306,5 +307,19 @@ describe('disconnect (demote a usable panel when the bridge drops)', () => {
     const s = activationReducer(initActivation(), reset({ connected: false }), 0); // bridge still active
     expect(s.gates.bridge.status).toBe('active');
     expect(activationReducer(s, { kind: 'disconnect' }, 100)).toEqual(s);
+  });
+});
+
+// #upgrade-recycle: a cold worker gate covers an upgrade/recycle handoff, so a stall
+// auto-retries (bounded) before surfacing the manual "xcsh didn't start" Retry.
+describe('shouldAutoRetryWorkerGate', () => {
+  it('auto-retries a cold gate up to maxAttempts, then stops (no loop)', () => {
+    expect(shouldAutoRetryWorkerGate({ cold: true, attempts: 0, maxAttempts: 1 })).toBe(true);
+    expect(shouldAutoRetryWorkerGate({ cold: true, attempts: 1, maxAttempts: 1 })).toBe(false); // budget spent → Retry
+    expect(shouldAutoRetryWorkerGate({ cold: true, attempts: 0, maxAttempts: 2 })).toBe(true);
+    expect(shouldAutoRetryWorkerGate({ cold: true, attempts: 2, maxAttempts: 2 })).toBe(false);
+  });
+  it('never auto-retries a WARM gate (a steady-state ready panel is unaffected)', () => {
+    expect(shouldAutoRetryWorkerGate({ cold: false, attempts: 0, maxAttempts: 1 })).toBe(false);
   });
 });

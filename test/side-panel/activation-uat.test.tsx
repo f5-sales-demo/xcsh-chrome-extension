@@ -133,12 +133,21 @@ describe('activation readiness UAT', () => {
     expect(txt(h.container)).toContain('page unavailable');
   });
 
-  it('worker stall → blocked (hard): overlay stays, input locked, Retry re-drives provisioning', async () => {
+  it('cold worker stall → auto-retries once (upgrade budget), then blocked; Retry re-drives', async () => {
     const h = mount(F5_TAB);
     await settle();
-    h.push({ type: 'status', connected: true }); // worker active
+    h.push({ type: 'status', connected: true }); // worker gate active; cold (no live worker at reset)
     await settle();
-    jest.advanceTimersByTime(15_000);
+    const g0 = h.posted.filter((m) => m.type === 'gate_blocked').length;
+    // First cold stall covers the upgrade/recycle handoff (30s budget). The bounded
+    // auto-retry re-drives provisioning (re-posts gate_blocked) instead of immediately
+    // surfacing "xcsh didn't start".
+    jest.advanceTimersByTime(30_000);
+    await settle();
+    expect(h.posted.filter((m) => m.type === 'gate_blocked').length).toBeGreaterThan(g0); // auto-retry re-drove
+    expect(txt(h.container)).not.toContain("xcsh didn't start"); // still trying, not a dead-end
+    // Auto-retry budget spent → the second stall stays blocked with the actionable Retry.
+    jest.advanceTimersByTime(30_000);
     await settle();
     expect(txt(h.container)).toContain("xcsh didn't start");
     expect(sendDisabled(h.container)).toBe(true);
