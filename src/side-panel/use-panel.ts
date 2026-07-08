@@ -12,6 +12,7 @@ import type { LiveTenant } from '../bridge-discovery';
 import {
   buildChatRequest,
   buildChatStop,
+  type ChatErrorMsg,
   type ChatInbound,
   type ChatStreamMsg,
   type InteractionMode,
@@ -32,7 +33,7 @@ import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex 
 import { sessionKeyFromUrl, sessionKeyStr } from '../tab-binding';
 import { PortBus } from '../ui/bus';
 import { type ActivationEvent, activationReducer, GATES, type GateName, newlyResolvedGates } from './activation';
-import { composerPlaceholder, contextChipText, initPanelState, inputLocked, panelReducer } from './state';
+import { abortInfo, composerPlaceholder, contextChipText, initPanelState, inputLocked, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
 const BRIDGE_TIMEOUT_MS = 10_000; // hard gate: host unreachable
@@ -54,6 +55,11 @@ export function usePanel() {
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
   const turnTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auto-resend-once: on a recoverable failure we stash the prompt; when activation
+  // returns to `ready` (worker re-provisioned) it is replayed exactly once, then
+  // cleared. `used` guarantees ONE automatic resend — a second failure falls through
+  // to the per-message Retry button.
+  const pendingResend = useRef<{ text: string; used: boolean } | null>(null);
   const gateTimers = useRef<Record<GateName, ReturnType<typeof setTimeout> | null>>({
     bridge: null,
     worker: null,
@@ -156,6 +162,15 @@ export function usePanel() {
       }
       gateTimers.current.page = setTimeout(() => fireActivation({ kind: 'timeout', gate: 'page' }), PAGE_TIMEOUT_MS);
     }
+    // Auto-resend-once: the worker was re-provisioned after a recoverable failure and
+    // is ready again — replay the stashed prompt exactly once, through the normal send
+    // path (which no-ops if a turn is already active, so a double-send is impossible).
+    const resend = pendingResend.current;
+    if (next.phase === 'ready' && resend && !resend.used && !stateRef.current.active) {
+      resend.used = true;
+      pendingResend.current = null;
+      sendMessage(resend.text);
+    }
   }
 
   // Start a fresh activation run for a tenant tab. The single "reset" primitive —
@@ -189,6 +204,7 @@ export function usePanel() {
     // would drop its stream). See #175.
     if (stateRef.current.active && tab?.id !== boundTabId.current) {
       await saveConversation(stateRef.current.conv);
+      pendingResend.current = null; // switching tabs → don't surprise-send on the other tab
       dispatch({ type: 'suspend_turn' });
     }
     const key = sessionKeyFromUrl(tab?.url);
@@ -227,6 +243,10 @@ export function usePanel() {
         // finally started → re-gate the tab so the whole sequence restarts.
         if (on && a.gates.bridge.status === 'active') fireActivation({ kind: 'bridge' });
         else if (on && a.phase === 'disconnected') void gateToActiveTab(boundTabId.current);
+        // Bridge dropped while usable → demote off `ready` so the composer locks and
+        // the overlay+Retry appear, instead of a stale `ready` that lets a doomed
+        // send fly into a dead socket (the root cause of the bare "Turn aborted.").
+        else if (!on && (a.phase === 'ready' || a.phase === 'degraded')) fireActivation({ kind: 'disconnect' });
         return;
       }
       if (msg.type === 'bridges') {
@@ -262,7 +282,8 @@ export function usePanel() {
       if (msg.type === 'tab_closed') {
         if ((msg.tabId as number) === boundTabId.current && stateRef.current.active) {
           if (turnTimeout.current) clearTimeout(turnTimeout.current);
-          dispatch({ type: 'abort_turn', at: now() });
+          pendingResend.current = null; // the tab is gone — nothing to resend to
+          dispatch({ type: 'abort_turn', at: now(), reason: 'tab-closed' });
         }
         loadSessionIndex()
           .then((i) => saveSessionIndex(removeTabSession(i, msg.tabId as number)))
@@ -326,6 +347,12 @@ export function usePanel() {
       scheduleSave();
       return;
     }
+    // Recoverable failure → stash this turn's prompt for a one-shot auto-resend once
+    // the worker is re-provisioned (the SW watchdog/onclose already drives that, and
+    // the bridges-update handler re-runs activation → ready → afterActivation resends).
+    if (ev.type === 'chat_error' && abortInfo((ev as ChatErrorMsg).reason).autoRecover && !pendingResend.current) {
+      pendingResend.current = { text: active.prompt, used: false };
+    }
     dispatch({ type: 'stream', msg: ev as ChatStreamMsg, at: now() });
     const t = (ev as ChatStreamMsg).type;
     if (t === 'chat_delta') scheduleSave();
@@ -378,12 +405,17 @@ export function usePanel() {
     conv = startAssistant(conv, asstMsgId, now());
     dispatch({ type: 'set_conv', conv });
     const turnId = `c-${crypto.randomUUID()}`;
-    dispatch({ type: 'begin_turn', id: turnId, msgId: asstMsgId });
+    dispatch({ type: 'begin_turn', id: turnId, msgId: asstMsgId, prompt: text });
     scheduleSave();
     turnTimeout.current = setTimeout(() => {
       if (stateRef.current.active?.id === turnId) {
-        dispatch({ type: 'abort_turn', at: now() });
+        // No first token in time. Fail with a specific reason and auto-heal: stash the
+        // prompt and re-drive activation (re-provisions the tab's worker); the resend
+        // fires once we reach `ready` again. Not a blind bare abort anymore.
+        dispatch({ type: 'abort_turn', at: now(), reason: 'first-token-timeout' });
+        if (!pendingResend.current) pendingResend.current = { text, used: false };
         saveConversation(stateRef.current.conv).catch(() => {});
+        if (boundSessionKey.current) beginActivation(boundSessionKey.current, boundTabId.current);
       }
     }, TURN_TIMEOUT_MS);
     bus.post(
@@ -404,8 +436,15 @@ export function usePanel() {
     if (!active) return;
     bus.post(buildChatStop(active.id));
     if (turnTimeout.current) clearTimeout(turnTimeout.current);
-    dispatch({ type: 'abort_turn', at: now() });
+    pendingResend.current = null; // a deliberate stop is not recoverable
+    dispatch({ type: 'abort_turn', at: now(), reason: 'user-stop' });
     saveConversation(stateRef.current.conv).catch(() => {});
+  }
+
+  /** Replay a failed turn's prompt (the per-message Retry affordance). No-ops if a
+   *  turn is already active (sendMessage guards this). */
+  function resendMessage(text: string) {
+    sendMessage(text);
   }
 
   function setMode(m: InteractionMode) {
@@ -433,6 +472,7 @@ export function usePanel() {
     contextLabel: contextChipText(state),
     placeholder: composerPlaceholder(state),
     sendMessage,
+    resendMessage,
     stop,
     setMode,
     refreshContext,

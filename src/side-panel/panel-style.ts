@@ -87,4 +87,6 @@ form#composer { position:relative; display:flex; flex-direction:column; margin:2
 .activation-overlay .ov-stalled, .activation-overlay .ov-stalled .ov-ico { color: var(--alert-red); }
 .activation-overlay .ov-retry { margin-top:10px; background: var(--f5-red); color:#fff; border:none;
   border-radius:8px; padding:6px 16px; cursor:pointer; font:inherit; }
+.body.error .msg-retry { margin-left:8px; background:transparent; color: var(--f5-red); border:1px solid var(--f5-red);
+  border-radius:6px; padding:1px 8px; cursor:pointer; font:inherit; font-size:0.85em; vertical-align:baseline; }
 `;

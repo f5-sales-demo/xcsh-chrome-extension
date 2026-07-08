@@ -16,7 +16,7 @@ export function App() {
         onRefresh={p.refreshContext}
         onDetach={p.toggleContext}
       />
-      <Transcript conv={s.conv} streaming={s.active !== null} />
+      <Transcript conv={s.conv} streaming={s.active !== null} onRetry={p.resendMessage} />
       <Composer
         disabled={inputLocked(s)}
         placeholder={p.placeholder}
