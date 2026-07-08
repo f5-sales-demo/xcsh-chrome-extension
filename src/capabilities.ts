@@ -19,8 +19,9 @@ import { type TSchema, Type } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import { INTERACTION_MODES } from './chat-protocol';
 
-/** Bumped on any change to the tool/feature contract so xcsh can detect drift. */
-export const CONTRACT_VERSION = '1.5.0';
+/** Bumped on any change to the tool/feature contract so xcsh can detect drift.
+ * 1.6.0: additive optional `reason` on chat_error (machine-readable failure cause). */
+export const CONTRACT_VERSION = '1.6.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
