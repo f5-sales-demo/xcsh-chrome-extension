@@ -70,6 +70,14 @@ export const CHAT_ERROR_REASONS = [
 
 export type ChatErrorReason = (typeof CHAT_ERROR_REASONS)[number];
 
+/** Panel-local abort causes that never travel the wire — the panel sets them
+ * directly on a turn (user pressed Stop, the chat tab closed, or no first token
+ * arrived in time). Together with the wire ChatErrorReasons they form the full
+ * vocabulary the transcript maps to a distinct, actionable message (see abortInfo). */
+export const PANEL_ONLY_ABORT_REASONS = ['user-stop', 'tab-closed', 'first-token-timeout'] as const;
+
+export type PanelAbortReason = ChatErrorReason | (typeof PANEL_ONLY_ABORT_REASONS)[number];
+
 export interface ChatErrorMsg {
   type: 'chat_error';
   id: string;
