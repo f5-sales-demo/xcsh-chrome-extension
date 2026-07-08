@@ -7,6 +7,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
+  classifyProbe,
   NO_WORKER_FOR_TAB,
   planChatRequest,
   planHelloAck,
@@ -57,11 +58,12 @@ describe('planChatRequest (RC-1 SW-side enforcement)', () => {
     });
   });
 
-  test('errors when the worker advertises a DIFFERENT tenant than the tab (stale)', () => {
+  test('errors with a no-worker reason when the worker advertises a DIFFERENT tenant (stale)', () => {
     expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'beta|production' }, reg, allOpen)).toEqual({
       kind: 'error',
       id: 'c1',
       error: NO_WORKER_FOR_TAB,
+      reason: 'no-worker',
     });
   });
 
@@ -80,6 +82,23 @@ describe('planChatRequest (RC-1 SW-side enforcement)', () => {
 
   test('errors when the panel sent no tabId', () => {
     expect(planChatRequest({ id: 'c1' }, reg, allOpen).kind).toBe('error');
+  });
+});
+
+// The route-ack watchdog fires while a turn is unanswered. It sends a ping and
+// checks whether the bridge port showed inbound activity (the worker pongs — and
+// pings the SW every 15s — even mid-LLM). This decouples "worker dead" from
+// "worker alive but the model is slow", so a slow turn is NEVER falsely killed.
+describe('classifyProbe (route-ack liveness)', () => {
+  test('answered → the turn already got a reply; nothing to do', () => {
+    expect(classifyProbe(true, false)).toBe('answered');
+    expect(classifyProbe(true, true)).toBe('answered');
+  });
+  test('unanswered + activity advanced → worker is alive (slow model), keep waiting', () => {
+    expect(classifyProbe(false, true)).toBe('alive');
+  });
+  test('unanswered + no activity after the probe → worker is dead/half-open, recover', () => {
+    expect(classifyProbe(false, false)).toBe('dead');
   });
 });
 
