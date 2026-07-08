@@ -150,6 +150,16 @@ export function activationReducer(s: ActivationState, e: ActivationEvent, now: n
   }
 }
 
+/** Whether a stalled worker gate should be AUTO-retried before surfacing the manual
+ *  "xcsh didn't start" Retry. Only for a COLD start (no live worker at reset), which
+ *  covers an upgrade/recycle handoff that can exceed the gate budget — a bounded
+ *  auto-retry re-drives provisioning so the panel recovers on its own. Bounded by
+ *  `maxAttempts` so a genuinely dead host still stops and shows Retry (no loop). A
+ *  warm gate never auto-retries (a steady-state ready panel is unaffected). (#upgrade-recycle) */
+export function shouldAutoRetryWorkerGate(opts: { cold: boolean; attempts: number; maxAttempts: number }): boolean {
+  return opts.cold && opts.attempts < opts.maxAttempts;
+}
+
 const isResolved = (st: GateStatus): boolean => st === 'passed' || st === 'stalled';
 
 /** Records for gates that resolved (passed/stalled) between `prev` and `next`. A
