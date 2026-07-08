@@ -17,6 +17,7 @@ import {
 } from './bridge-discovery';
 import { bridgeHello, dispatchBridgeFrame } from './bridge-transport';
 import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
+import type { ChatErrorReason } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import {
   type DiagEvent,
@@ -31,7 +32,14 @@ import {
 } from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
-import { planChatRequest, planHelloAck, planReprovision, planReTenant, planToolRequest } from './sw-router';
+import {
+  classifyProbe,
+  planChatRequest,
+  planHelloAck,
+  planReprovision,
+  planReTenant,
+  planToolRequest,
+} from './sw-router';
 import {
   type BindingState,
   decideBinding,
@@ -408,17 +416,87 @@ function pushStatus(connected: boolean, reason?: string): void {
   broadcastToChatPanels({ type: 'status', connected, reason });
 }
 
-/** Fail every active chat turn loudly when the bridge link drops. */
-function failActiveTurns(error: string): void {
+/** Fail every active chat turn loudly when the bridge link drops, tagging the
+ * machine-readable cause so the panel renders a distinct, recoverable message. */
+function failActiveTurns(error: string, reason?: ChatErrorReason): void {
   for (const [id, port] of [...turnToPort.entries()]) {
     try {
-      port.postMessage({ type: 'chat_error', id, error });
+      port.postMessage({ type: 'chat_error', id, error, ...(reason ? { reason } : {}) });
     } catch {
       /* ignore */
     }
     turnToPort.delete(id);
     turnToBridgePort.delete(id);
+    clearRouteAck(id);
   }
+}
+
+// --- Route-ack liveness watchdog -------------------------------------------
+// A routed turn can land in a socket that reads OPEN but whose worker is gone
+// (half-open after OS sleep, or reaped): the frame vanishes and nothing returns,
+// and the global 45s heartbeat misses it because other tabs' sockets keep
+// `lastActivityTs` fresh. Per turn, if no reply arrives within ROUTE_ACK_MS we
+// PING the turn's own bridge port and check whether that port shows inbound
+// activity within PROBE_MS — the worker pongs (and pings us every 15s) even while
+// awaiting a slow model, so a live-but-slow turn is proven alive and never killed;
+// only a silent (dead) socket is recovered: drop it, re-provision the tab's
+// worker, and tell the panel with `bridge-unresponsive`.
+const routeAckTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const ROUTE_ACK_MS = 6_000;
+const PROBE_MS = 2_000;
+
+function clearRouteAck(id: string): void {
+  const t = routeAckTimers.get(id);
+  if (t) {
+    clearTimeout(t);
+    routeAckTimers.delete(id);
+  }
+}
+
+function armRouteAck(id: string, port: number, tabId: number | undefined, sessionKey: string | undefined): void {
+  clearRouteAck(id);
+  routeAckTimers.set(
+    id,
+    setTimeout(() => probeAndMaybeRecover(id, port, tabId, sessionKey), ROUTE_ACK_MS),
+  );
+}
+
+function probeAndMaybeRecover(
+  id: string,
+  port: number,
+  tabId: number | undefined,
+  sessionKey: string | undefined,
+): void {
+  routeAckTimers.delete(id);
+  if (!turnRoutedAt.has(id)) return; // a reply already arrived (watchdog stale)
+  const before = registry.get(port)?.lastSeen ?? 0;
+  sendTo(port, { type: 'ping' }); // a live worker pongs in ms, even mid-model-call
+  setTimeout(() => {
+    const after = registry.get(port)?.lastSeen ?? 0;
+    const outcome = classifyProbe(!turnRoutedAt.has(id), after > before);
+    if (outcome === 'answered') return;
+    if (outcome === 'alive') return armRouteAck(id, port, tabId, sessionKey); // slow model — keep waiting
+    // dead/half-open: drop the socket (onclose prunes + reconnects), re-provision
+    // the tab's worker (adopts a warm spare), and fail the turn with a real cause.
+    const panel = turnToPort.get(id);
+    try {
+      sockets.get(port)?.close();
+    } catch {
+      /* onclose handles cleanup */
+    }
+    if (typeof tabId === 'number' && typeof sessionKey === 'string') {
+      nmSend({ type: 'provision', sessionId: sidForTab(tabId), tenant: sessionKey });
+    }
+    try {
+      panel?.postMessage({ type: 'chat_error', id, error: 'xcsh stopped responding', reason: 'bridge-unresponsive' });
+    } catch {
+      /* panel closing */
+    }
+    turnToPort.delete(id);
+    turnToBridgePort.delete(id);
+    turnRoutedAt.delete(id);
+    recordDiag('chat_route', { id, tabId: typeof tabId === 'number' ? tabId : null, error: true });
+  }, PROBE_MS);
 }
 
 function startHeartbeat(): void {
@@ -427,7 +505,7 @@ function startHeartbeat(): void {
     if (!anyOpen()) return;
     if (isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
       pushStatus(false, 'stale');
-      failActiveTurns('bridge unresponsive');
+      failActiveTurns('bridge unresponsive', 'bridge-unresponsive');
       for (const s of sockets.values()) {
         try {
           s.close();
@@ -667,7 +745,7 @@ function connectPort(port: number): void {
       // each close saturated the diag ring buffer and evicted the useful events (#182).
       if (opened) recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
-      if (!anyOpen()) failActiveTurns('bridge disconnected');
+      if (!anyOpen()) failActiveTurns('bridge disconnected', 'bridge-disconnected');
       broadcastBridges();
       // The pinned port always keeps retrying. Otherwise: if this attempt never
       // opened, the port is dead/gone — forget it (stops the storm; the 30s scan
@@ -797,11 +875,13 @@ function onMessage(msg: any, sourcePort: number): void {
         recordDiag('chat_reply', { id: frame.id, ms: Date.now() - routedAt });
         recordSpan('route_first_token', Date.now() - routedAt, { id: frame.id }); // TTFT (#170): route→first-token envelope
         turnRoutedAt.delete(frame.id);
+        clearRouteAck(frame.id); // the worker answered — stand the watchdog down
       }
       if (frame.type === 'chat_done' || frame.type === 'chat_error') {
         turnToPort.delete(frame.id);
         turnToBridgePort.delete(frame.id);
         turnRoutedAt.delete(frame.id);
+        clearRouteAck(frame.id);
       }
     },
   });
@@ -962,7 +1042,7 @@ chrome.runtime.onConnect.addListener((port) => {
       const diagTab = typeof m.tabId === 'number' ? m.tabId : null;
       if (plan.kind === 'error') {
         recordDiag('chat_route', { id: plan.id, tabId: diagTab, error: true });
-        port.postMessage({ type: 'chat_error', id: plan.id, error: plan.error });
+        port.postMessage({ type: 'chat_error', id: plan.id, error: plan.error, reason: plan.reason });
         return;
       }
       turnToPort.set(plan.id, port);
@@ -978,6 +1058,14 @@ chrome.runtime.onConnect.addListener((port) => {
         recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
       }
       sendTo(plan.port, m);
+      // Arm the liveness watchdog: if this routed turn produces no reply, probe the
+      // worker and recover if it's actually dead (half-open socket after sleep/reap).
+      armRouteAck(
+        plan.id,
+        plan.port,
+        typeof m.tabId === 'number' ? m.tabId : undefined,
+        typeof m.sessionKey === 'string' ? m.sessionKey : undefined,
+      );
       return;
     }
     if (m.type === 'chat_stop') {
@@ -1081,6 +1169,7 @@ chrome.runtime.onConnect.addListener((port) => {
         turnToPort.delete(id);
         turnToBridgePort.delete(id);
         turnRoutedAt.delete(id);
+        clearRouteAck(id);
       }
   });
   // Greet with current connection status so the panel can render its dot.
