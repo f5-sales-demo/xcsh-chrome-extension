@@ -63,7 +63,10 @@ describe('buildContextSnapshot', () => {
     const s = buildContextSnapshot(
       base({ api: { url: '/a', status: 200, resourceType: null, body: { spec: { token: 'sekret' } } } }),
     );
-    expect(((s.api?.body as Record<string, unknown>).spec as Record<string, unknown>).token).toBe('[redacted]');
+    const api = s.api;
+    if (!api) throw new Error('expected an api snapshot');
+    const spec = (api.body as Record<string, unknown>).spec as Record<string, unknown>;
+    expect(spec.token).toBe('[redacted]');
   });
 
   it('caps a huge ax tree by node count and marks truncated', () => {
