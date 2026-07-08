@@ -32,13 +32,7 @@ import {
 } from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
-import {
-  planChatRequest,
-  planHelloAck,
-  planReprovision,
-  planReTenant,
-  planToolRequest,
-} from './sw-router';
+import { planChatRequest, planHelloAck, planReprovision, planReTenant, planToolRequest } from './sw-router';
 import {
   type BindingState,
   decideBinding,
