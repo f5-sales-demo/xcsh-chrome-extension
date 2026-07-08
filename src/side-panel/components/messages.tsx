@@ -55,10 +55,17 @@ export function ThinkingIndicator({ level }: { level?: number }) {
   );
 }
 
-export function ErrorMessage({ text }: { text: string }) {
+export function ErrorMessage({ text, onRetry }: { text: string; onRetry?: () => void }) {
   return (
     <GutterRow glyph={GLYPHS.system} glyphClass="g-error">
-      <div class="body error">{text}</div>
+      <div class="body error">
+        {text}
+        {onRetry ? (
+          <button type="button" class="msg-retry" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
+      </div>
     </GutterRow>
   );
 }

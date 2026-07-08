@@ -53,6 +53,32 @@ describe('panelReducer', () => {
     expect(msg?.text).toBe('boom');
   });
 
+  it('carries the wire reason + the prompt onto a chat_error message (for distinct text + Retry)', () => {
+    let s = base();
+    s = { ...s, conv: startAssistant(s.conv, 'a1', 0) };
+    s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1', prompt: 'create a load balancer' });
+    s = panelReducer(s, {
+      type: 'stream',
+      msg: { type: 'chat_error', id: 't1', error: 'gone', reason: 'bridge-unresponsive' },
+      at: 5,
+    });
+    const msg = s.conv.messages.find((m) => m.id === 'a1');
+    expect(msg?.abortReason).toBe('bridge-unresponsive');
+    expect(msg?.retryPrompt).toBe('create a load balancer');
+  });
+
+  it('abort_turn records its reason + the prompt (timeout/stop/tab-close)', () => {
+    let s = base();
+    s = { ...s, conv: startAssistant(s.conv, 'a1', 0) };
+    s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1', prompt: 'why is the sky blue' });
+    s = panelReducer(s, { type: 'abort_turn', at: 9, reason: 'first-token-timeout' });
+    expect(s.active).toBeNull();
+    const msg = s.conv.messages.find((m) => m.id === 'a1');
+    expect(msg?.aborted).toBe(true);
+    expect(msg?.abortReason).toBe('first-token-timeout');
+    expect(msg?.retryPrompt).toBe('why is the sky blue');
+  });
+
   it('composerPlaceholder shows the readying text in readying/blocked, else the default', () => {
     expect(composerPlaceholder({ ...base(), activation: act({ connected: true }) })).toBe(
       'starting xcsh for this tab…',

@@ -40,6 +40,7 @@ export type ActivationEvent =
   | { kind: 'worker' }
   | { kind: 'page' }
   | { kind: 'timeout'; gate: GateName }
+  | { kind: 'disconnect' }
   | { kind: 'retry' };
 
 export interface ActivationRecord {
@@ -131,6 +132,14 @@ export function activationReducer(s: ActivationState, e: ActivationEvent, now: n
       const g = s.gates[e.gate];
       if (g.status !== 'active') return s; // only an in-flight gate can stall
       return withPhase({ ...s, gates: { ...s.gates, [e.gate]: resolve(g, now, 'stalled') } });
+    }
+    case 'disconnect': {
+      // A live bridge dropped after we were usable (ready/degraded). Stall the
+      // bridge gate so the panel demotes to `disconnected` — locking the composer
+      // and raising the overlay+Retry — instead of leaving a stale `ready` that lets
+      // a doomed send fly into a dead socket. Only meaningful once bridge passed.
+      if (s.gates.bridge.status !== 'passed') return s;
+      return withPhase({ ...s, gates: { ...s.gates, bridge: resolve(s.gates.bridge, now, 'stalled') } });
     }
     case 'retry': {
       if (s.gates.worker.status !== 'stalled') return s;

@@ -6,7 +6,7 @@
  * first appeared in, for the persistent per-conversation "References" drawer.
  */
 
-import type { ChatRefWire, InteractionMode } from './chat-protocol';
+import type { ChatRefWire, InteractionMode, PanelAbortReason } from './chat-protocol';
 import { DEFAULT_MODE } from './chat-protocol';
 
 export interface ChatReference {
@@ -27,6 +27,10 @@ export interface StoredMessage {
   tool?: string;
   ok?: boolean;
   aborted?: boolean;
+  /** Why this turn aborted (drives the transcript's distinct message + Retry). */
+  abortReason?: PanelAbortReason;
+  /** The user prompt to replay if this aborted turn is retried. */
+  retryPrompt?: string;
 }
 
 export interface Conversation {
@@ -146,10 +150,20 @@ export function appendToolNotice(
   };
 }
 
-export function markAborted(conv: Conversation, msgId: string, at: number): Conversation {
+export function markAborted(
+  conv: Conversation,
+  msgId: string,
+  at: number,
+  reason?: PanelAbortReason,
+  retryPrompt?: string,
+): Conversation {
   return {
     ...conv,
-    messages: conv.messages.map((m) => (m.id === msgId ? { ...m, aborted: true } : m)),
+    messages: conv.messages.map((m) =>
+      m.id === msgId
+        ? { ...m, aborted: true, ...(reason ? { abortReason: reason } : {}), ...(retryPrompt ? { retryPrompt } : {}) }
+        : m,
+    ),
     updatedAt: at,
   };
 }

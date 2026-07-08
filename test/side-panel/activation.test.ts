@@ -281,3 +281,30 @@ describe('reset mid-run', () => {
     expect(s2.phase).toBe('readying');
   });
 });
+
+describe('disconnect (demote a usable panel when the bridge drops)', () => {
+  // Drive a run to ready: connected + workerLive passes bridge+worker, page passes.
+  const ready = () => {
+    let s = activationReducer(initActivation(), reset({ connected: true, workerLive: true }), 0);
+    s = activationReducer(s, { kind: 'page' }, 10);
+    return s;
+  };
+  it('stalls the bridge gate from ready → disconnected (locks input, raises the overlay)', () => {
+    const s = ready();
+    expect(s.phase).toBe('ready');
+    const d = activationReducer(s, { kind: 'disconnect' }, 100);
+    expect(d.phase).toBe('disconnected');
+    expect(d.gates.bridge.status).toBe('stalled');
+  });
+  it('also demotes from the soft degraded phase', () => {
+    let s = activationReducer(initActivation(), reset({ connected: true, workerLive: true }), 0);
+    s = activationReducer(s, { kind: 'timeout', gate: 'page' }, 10); // page soft-stall → degraded
+    expect(s.phase).toBe('degraded');
+    expect(activationReducer(s, { kind: 'disconnect' }, 100).phase).toBe('disconnected');
+  });
+  it('is a no-op before the bridge has passed (nothing to demote)', () => {
+    const s = activationReducer(initActivation(), reset({ connected: false }), 0); // bridge still active
+    expect(s.gates.bridge.status).toBe('active');
+    expect(activationReducer(s, { kind: 'disconnect' }, 100)).toEqual(s);
+  });
+});
