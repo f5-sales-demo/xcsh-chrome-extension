@@ -8,6 +8,7 @@
  * seam the earlier regression slipped through. Effects, timers, Date.now(), and
  * chrome APIs stay in the SW; nothing here touches them.
  */
+import type { ChatErrorReason } from './chat-protocol';
 import { type BridgeLike, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from './session-routing';
 
 /** Shown to the panel when a chat turn can't be routed to the tab's own worker. */
@@ -19,7 +20,9 @@ export interface ChatRequestLike {
   sessionKey?: unknown;
 }
 
-export type ChatRoutePlan = { kind: 'route'; id: string; port: number } | { kind: 'error'; id: string; error: string };
+export type ChatRoutePlan =
+  | { kind: 'route'; id: string; port: number }
+  | { kind: 'error'; id: string; error: string; reason: ChatErrorReason };
 
 /** Decide where a panel chat turn goes: the worker for the panel's OWN tab whose
  *  advertised tenant|env matches `sessionKey` (when supplied) and whose socket is
@@ -35,8 +38,24 @@ export function planChatRequest(
     registry,
     typeof msg.sessionKey === 'string' ? msg.sessionKey : undefined,
   );
-  if (target === undefined || !isOpen(target)) return { kind: 'error', id: msg.id, error: NO_WORKER_FOR_TAB };
+  if (target === undefined || !isOpen(target)) {
+    return { kind: 'error', id: msg.id, error: NO_WORKER_FOR_TAB, reason: 'no-worker' };
+  }
   return { kind: 'route', id: msg.id, port: target };
+}
+
+export type ProbeOutcome = 'answered' | 'alive' | 'dead';
+
+/** Decide a route-ack watchdog's outcome for an unanswered turn. The SW arms this
+ * while a routed turn has produced no reply: it sends a ping to the turn's bridge
+ * port and, after a short window, checks whether that port saw ANY inbound frame
+ * (the worker pongs immediately and also pings the SW every 15s — even while it is
+ * awaiting a slow model). So `activityAdvanced` proves the worker is alive
+ * independently of model latency, and only a genuinely silent (dead/half-open)
+ * socket is classified `dead` → recover. Pure; the SW owns the timers + I/O. */
+export function classifyProbe(answered: boolean, activityAdvanced: boolean): ProbeOutcome {
+  if (answered) return 'answered';
+  return activityAdvanced ? 'alive' : 'dead';
 }
 
 export type ToolPlan = { kind: 'run'; tabId: number } | { kind: 'refuse' };
