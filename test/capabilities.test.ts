@@ -132,12 +132,13 @@ describe('capabilities — features & manifest', () => {
     };
     const hints = chat.promptHints;
     expect(hints).toBeDefined();
+    if (!hints) throw new Error('capabilities.features.chat.promptHints is missing');
     for (const k of ['role', 'grounding', 'referenceLinks', 'toolUse'] as const) {
-      expect(typeof hints?.[k]).toBe('string');
-      expect((hints?.[k] as string).length).toBeGreaterThan(0);
+      expect(typeof hints[k]).toBe('string');
+      expect((hints[k] as string).length).toBeGreaterThan(0);
     }
     // Mode hints cover exactly the advertised modes and match the single source.
-    expect(Object.keys(hints?.modes ?? {}).sort()).toEqual([...chat.modes].sort());
+    expect(Object.keys(hints.modes ?? {}).sort()).toEqual([...chat.modes].sort());
     for (const m of INTERACTION_MODES) {
       expect(hints?.modes[m.id]).toBe(m.blurb);
     }

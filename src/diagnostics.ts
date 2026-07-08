@@ -334,7 +334,7 @@ export function summarizeTtft(events: DiagEvent[]): TtftTimeline | null {
   const present = new Set(ordered.map((s) => s.stage));
   const stages = ordered.filter((s) => {
     const kids = TTFT_ENVELOPES[s.stage];
-    return !kids || !kids.every((k) => present.has(k));
+    return !kids?.every((k) => present.has(k));
   });
   const total = stages.reduce((n, s) => n + s.ms, 0);
   const dominant = stages.reduce((m, s) => (s.ms > m.ms ? s : m)).stage;

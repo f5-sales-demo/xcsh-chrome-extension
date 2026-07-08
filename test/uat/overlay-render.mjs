@@ -72,7 +72,7 @@ function stub(tab) {
       for (const fn of listeners.slice()) fn(frame);
     },
     reqIdOf: (type) => [...posted].reverse().find((m) => m && m.type === type && typeof m.reqId === 'number')?.reqId,
-    postedTypes: () => posted.map((m) => m && m.type),
+    postedTypes: () => posted.map((m) => m?.type),
   };
   globalThis.chrome = {
     runtime: {
@@ -117,7 +117,7 @@ function stub(tab) {
 const results = [];
 const ok = (name, pass, detail = '') => {
   results.push({ name, pass });
-  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
+  console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
