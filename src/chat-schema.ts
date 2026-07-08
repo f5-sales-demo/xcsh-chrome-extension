@@ -9,13 +9,14 @@
  */
 
 import { type TSchema, Type } from '@sinclair/typebox';
-import type {
-  ChatDeltaMsg,
-  ChatDoneMsg,
-  ChatErrorMsg,
-  ChatRequestMsg,
-  ChatStopMsg,
-  ChatToolNoticeMsg,
+import {
+  CHAT_ERROR_REASONS,
+  type ChatDeltaMsg,
+  type ChatDoneMsg,
+  type ChatErrorMsg,
+  type ChatRequestMsg,
+  type ChatStopMsg,
+  type ChatToolNoticeMsg,
 } from './chat-protocol';
 import type { PageContextSnapshot } from './context-snapshot';
 
@@ -87,6 +88,7 @@ export const ChatErrorSchema = Type.Object({
   type: Type.Literal('chat_error'),
   id: ChatId,
   error: Type.String(),
+  reason: Type.Optional(Type.Union(CHAT_ERROR_REASONS.map((r) => Type.Literal(r)))),
 });
 
 export const ChatToolNoticeSchema = Type.Object({
@@ -153,7 +155,12 @@ const chatDone: ChatDoneMsg = {
   references: [{ kind: 'doc', title: 'HTTP LB', url: 'https://docs.cloud.f5.com/docs/how-to' }],
 };
 const chatDoneNoRefs: ChatDoneMsg = { type: 'chat_done', id: 'c-1111' };
-const chatError: ChatErrorMsg = { type: 'chat_error', id: 'c-1111', error: 'HTTP 403 forbidden' };
+const chatError: ChatErrorMsg = {
+  type: 'chat_error',
+  id: 'c-1111',
+  error: 'HTTP 403 forbidden',
+  reason: 'provider-4xx',
+};
 const chatToolNotice: ChatToolNoticeMsg = { type: 'chat_tool_notice', id: 'c-1111', tool: 'navigate', ok: true };
 
 export const CHAT_EXAMPLES = {

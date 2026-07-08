@@ -51,10 +51,30 @@ export interface ChatDoneMsg {
   id: string;
   references?: ChatRefWire[];
 }
+/** Machine-readable cause of a terminal chat_error, so the panel can render a
+ * distinct, actionable message (and decide whether to auto-recover) instead of a
+ * generic failure. Additive/optional on the wire (contract 1.6.0); an omitted
+ * reason means an unclassified error (show the raw error text). Shared vocabulary
+ * with xcsh (keep both lists identical). */
+export const CHAT_ERROR_REASONS = [
+  'bridge-disconnected', // the worker's bridge closed mid-turn
+  'bridge-unresponsive', // the socket looked open but the worker never answered
+  'no-worker', // no worker is running for this tab
+  'session-busy', // a turn is already in flight for this session
+  'session-disposed', // the worker session was torn down
+  'token-expired', // F5 XC API token expired
+  'token-expiring', // F5 XC API token is about to expire
+  'provider-4xx', // upstream provider rejected the request (client error)
+  'provider-5xx', // upstream provider failed (server error) — retryable
+] as const;
+
+export type ChatErrorReason = (typeof CHAT_ERROR_REASONS)[number];
+
 export interface ChatErrorMsg {
   type: 'chat_error';
   id: string;
   error: string;
+  reason?: ChatErrorReason;
 }
 export type ChatStreamMsg = ChatDeltaMsg | ChatDoneMsg | ChatErrorMsg;
 
