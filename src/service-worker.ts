@@ -2188,7 +2188,13 @@ async function annotate(
 ): Promise<unknown> {
   const tabId = requireTab(_tabId);
   const kind = params?.kind;
-  if (!kind) throw new Error('annotate: kind is required');
+  // annotate is a PURELY COSMETIC teaching overlay and must NEVER throw. A failed
+  // annotation (missing kind, a stale ref that won't resolve, an off-screen target)
+  // used to surface as a tool error, and the model would retry-loop on it — burning
+  // an entire config-building turn on decoration and never completing the real work
+  // (observed: dozens of `annotate: ✗ failed` derailing multi-resource creation).
+  // Every non-drawable case now returns `{ skipped }` so the model just moves on.
+  if (!kind) return { skipped: true, reason: 'annotate: no kind' };
   if (!explainMode) return { skipped: true, reason: 'explain mode off' };
 
   if (kind === 'highlight') {
@@ -2198,7 +2204,8 @@ async function annotate(
     } else if (params.ref) {
       rect = await resolveRectByRef(tabId, params.ref);
     }
-    if (!rect) throw new Error('annotate: highlight needs numeric x/y/w/h or a resolvable ref');
+    // Cosmetic-only: skip (never throw) when the target can't be resolved.
+    if (!rect) return { skipped: true, reason: 'annotate: highlight target not resolvable' };
     chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'highlight', ...rect }).catch(() => {});
     return { drawn: 'highlight', ...rect };
   }
@@ -2206,12 +2213,13 @@ async function annotate(
   if (kind === 'fingerprint') {
     const x = Number(params.x);
     const y = Number(params.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('annotate: fingerprint needs numeric x,y');
+    if (!Number.isFinite(x) || !Number.isFinite(y))
+      return { skipped: true, reason: 'annotate: fingerprint needs numeric x,y' };
     chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
     return { drawn: 'fingerprint', x, y };
   }
 
-  throw new Error(`annotate: unknown kind: ${kind}`);
+  return { skipped: true, reason: `annotate: unknown kind: ${kind}` };
 }
 
 /**
@@ -2313,6 +2321,13 @@ async function typeText(params: { text: string }, _tabId?: number): Promise<{ ty
   const text = params?.text;
   if (typeof text !== 'string') throw new Error('type_text: text is required');
   await ensureDebuggerAttached(tabId);
+  // Clear any existing value in the focused field (select-all → insertText replaces
+  // the selection) so we don't APPEND to a default value (443→443443, 15→115) — a
+  // real bug that caused form validation failures throughout multi-resource creation.
+  await evalInPage<void>(
+    tabId,
+    `(() => { const el = document.activeElement; if (el && typeof el.select === 'function') el.select(); else document.execCommand('selectAll', false); })()`,
+  );
   await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
   return { typed: text };
 }
@@ -2366,8 +2381,12 @@ async function labelSelect(
   // ── B. Click the input (trusted CDP — keeps focus). ─────────────────────────
   await dispatchClickAt(tabId, inputCoords.x, inputCoords.y);
 
-  // ── C. Small settle, then type (Input.insertText keeps focus). ───────────────
+  // ── C. Small settle, select-all (clear any default/stale text), then type. ──
   await new Promise((r) => setTimeout(r, 300));
+  await evalInPage<void>(
+    tabId,
+    `(() => { const el = document.activeElement; if (el && typeof el.select === 'function') el.select(); else document.execCommand('selectAll', false); })()`,
+  );
   await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text: value });
 
   // ── D. Poll the CDK portal for a matching option. ───────────────────────────
