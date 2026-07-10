@@ -42,7 +42,7 @@ import {
 } from './activation';
 import { abortInfo, composerPlaceholder, contextChipText, initPanelState, inputLocked, panelReducer } from './state';
 
-const TURN_TIMEOUT_MS = 30_000; // old side-panel.ts:84
+const TURN_TIMEOUT_MS = 120_000; // old side-panel.ts:84; 120s covers complex multi-resource first-token thinking (#246)
 const BRIDGE_TIMEOUT_MS = 10_000; // hard gate: host unreachable
 const WORKER_TIMEOUT_MS = 15_000; // hard gate: worker never bound (was PROVISION_TIMEOUT_MS, #180)
 // A COLD start — no live worker yet — must cover an upgrade/recycle handoff (old
