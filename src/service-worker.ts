@@ -2213,7 +2213,8 @@ async function annotate(
   if (kind === 'fingerprint') {
     const x = Number(params.x);
     const y = Number(params.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return { skipped: true, reason: 'annotate: fingerprint needs numeric x,y' };
+    if (!Number.isFinite(x) || !Number.isFinite(y))
+      return { skipped: true, reason: 'annotate: fingerprint needs numeric x,y' };
     chrome.tabs.sendMessage(tabId, { type: 'overlay', kind: 'fingerprint', x, y }).catch(() => {});
     return { drawn: 'fingerprint', x, y };
   }
