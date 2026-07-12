@@ -20,8 +20,10 @@ import { Value } from '@sinclair/typebox/value';
 import { INTERACTION_MODES } from './chat-protocol';
 
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift.
- * 1.6.0: additive optional `reason` on chat_error (machine-readable failure cause). */
-export const CONTRACT_VERSION = '1.6.0';
+ * 1.6.0: additive optional `reason` on chat_error (machine-readable failure cause).
+ * 1.7.0: additive `chat_keepalive` liveness frame (worker proof-of-life during a
+ *        long pre-first-token think, so the panel doesn't fire first-token-timeout). */
+export const CONTRACT_VERSION = '1.7.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 

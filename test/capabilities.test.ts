@@ -115,8 +115,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.6.0 (additive chat_error reason)', () => {
-    expect(CONTRACT_VERSION).toBe('1.6.0');
+  it('CONTRACT_VERSION is 1.7.0 (additive chat_keepalive liveness frame)', () => {
+    expect(CONTRACT_VERSION).toBe('1.7.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {

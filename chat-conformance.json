@@ -1,5 +1,5 @@
 {
-  "contractVersion": "1.6.0",
+  "contractVersion": "1.7.0",
   "schemas": {
     "chat_request": {
       "type": "object",
@@ -276,6 +276,20 @@
         }
       }
     },
+    "chat_keepalive": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "const": "chat_keepalive",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        }
+      }
+    },
     "page_context_snapshot": {
       "type": "object",
       "required": ["v", "capturedAt", "tabId", "url", "path", "title", "ax", "api", "truncated"],
@@ -481,6 +495,10 @@
         "id": "c-1111",
         "tool": "navigate",
         "ok": true
+      },
+      "chat_keepalive": {
+        "type": "chat_keepalive",
+        "id": "c-1111"
       }
     },
     "invalid": [
