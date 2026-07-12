@@ -98,7 +98,16 @@ export interface ChatToolNoticeMsg {
   detail?: string;
 }
 
-export type ChatInbound = ChatStreamMsg | ChatToolNoticeMsg;
+/** Liveness signal: the worker is actively working the turn (e.g. streaming model
+ * thinking) before any visible token. Purely a keepalive — the panel treats it as
+ * proof-of-life to clear the first-token timeout so a long legitimate think isn't
+ * mistaken for a dead worker; it carries no renderable content. */
+export interface ChatKeepaliveMsg {
+  type: 'chat_keepalive';
+  id: string;
+}
+
+export type ChatInbound = ChatStreamMsg | ChatToolNoticeMsg | ChatKeepaliveMsg;
 
 export interface ChatTurnState {
   id: string;
@@ -152,5 +161,7 @@ export function reduceChatTurn(state: ChatTurnState, msg: ChatStreamMsg): ChatTu
 export function isChatInbound(msg: unknown): msg is ChatInbound {
   if (!msg || typeof msg !== 'object') return false;
   const t = (msg as { type?: unknown }).type;
-  return t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice';
+  return (
+    t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive'
+  );
 }
