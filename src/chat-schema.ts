@@ -14,6 +14,7 @@ import {
   type ChatDeltaMsg,
   type ChatDoneMsg,
   type ChatErrorMsg,
+  type ChatKeepaliveMsg,
   type ChatRequestMsg,
   type ChatStopMsg,
   type ChatToolNoticeMsg,
@@ -99,6 +100,11 @@ export const ChatToolNoticeSchema = Type.Object({
   detail: Type.Optional(Type.String()),
 });
 
+export const ChatKeepaliveSchema = Type.Object({
+  type: Type.Literal('chat_keepalive'),
+  id: ChatId,
+});
+
 /** Wire-message schemas keyed by `type`. */
 export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_request: ChatRequestSchema,
@@ -107,6 +113,7 @@ export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_done: ChatDoneSchema,
   chat_error: ChatErrorSchema,
   chat_tool_notice: ChatToolNoticeSchema,
+  chat_keepalive: ChatKeepaliveSchema,
 };
 
 // --- Golden examples (independent oracles, validated against the schemas) -----
@@ -162,6 +169,7 @@ const chatError: ChatErrorMsg = {
   reason: 'provider-4xx',
 };
 const chatToolNotice: ChatToolNoticeMsg = { type: 'chat_tool_notice', id: 'c-1111', tool: 'navigate', ok: true };
+const chatKeepalive: ChatKeepaliveMsg = { type: 'chat_keepalive', id: 'c-1111' };
 
 export const CHAT_EXAMPLES = {
   valid: {
@@ -175,6 +183,7 @@ export const CHAT_EXAMPLES = {
     chat_done_no_refs: chatDoneNoRefs,
     chat_error: chatError,
     chat_tool_notice: chatToolNotice,
+    chat_keepalive: chatKeepalive,
   },
   // Invalid examples are intentionally malformed; each `schema` names the schema
   // it must be REJECTED by.

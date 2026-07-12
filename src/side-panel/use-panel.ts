@@ -358,10 +358,35 @@ export function usePanel() {
     // eslint-disable-next-line
   }, []);
 
+  // Arm (or re-arm) the first-token watchdog for a turn: if no first token / liveness
+  // signal arrives within TURN_TIMEOUT_MS, fail with a specific reason and auto-heal
+  // (stash the prompt, re-drive activation → the resend fires once ready again).
+  // Shared by sendMessage (initial arm) and onChatEvent (re-arm on chat_keepalive).
+  function armFirstTokenTimeout(turnId: string, text: string) {
+    if (turnTimeout.current) clearTimeout(turnTimeout.current);
+    turnTimeout.current = setTimeout(() => {
+      if (stateRef.current.active?.id === turnId) {
+        dispatch({ type: 'abort_turn', at: now(), reason: 'first-token-timeout' });
+        if (!pendingResend.current) pendingResend.current = { text, used: false };
+        saveConversation(stateRef.current.conv).catch(() => {});
+        if (boundSessionKey.current) beginActivation(boundSessionKey.current, boundTabId.current);
+      }
+    }, TURN_TIMEOUT_MS);
+  }
+
   // Inbound chat routing (old onChatEvent, 551–605).
   function onChatEvent(ev: ChatInbound) {
     const active = stateRef.current.active;
     if (!active || active.id !== ev.id) return;
+    // Liveness signal: the worker is actively working the turn (streaming model
+    // thinking) but hasn't produced a visible token yet. Re-arm the first-token
+    // timer instead of clearing it — a long legitimate think must not be aborted,
+    // yet if keepalives STOP (worker truly dead), the timer still fires and self-heals.
+    // Carries no renderable content, so return before the stream dispatch below.
+    if (ev.type === 'chat_keepalive') {
+      armFirstTokenTimeout(active.id, active.prompt);
+      return;
+    }
     if (turnTimeout.current) {
       clearTimeout(turnTimeout.current);
       turnTimeout.current = null;
@@ -438,17 +463,9 @@ export function usePanel() {
     const turnId = `c-${crypto.randomUUID()}`;
     dispatch({ type: 'begin_turn', id: turnId, msgId: asstMsgId, prompt: text });
     scheduleSave();
-    turnTimeout.current = setTimeout(() => {
-      if (stateRef.current.active?.id === turnId) {
-        // No first token in time. Fail with a specific reason and auto-heal: stash the
-        // prompt and re-drive activation (re-provisions the tab's worker); the resend
-        // fires once we reach `ready` again. Not a blind bare abort anymore.
-        dispatch({ type: 'abort_turn', at: now(), reason: 'first-token-timeout' });
-        if (!pendingResend.current) pendingResend.current = { text, used: false };
-        saveConversation(stateRef.current.conv).catch(() => {});
-        if (boundSessionKey.current) beginActivation(boundSessionKey.current, boundTabId.current);
-      }
-    }, TURN_TIMEOUT_MS);
+    // Auto-heal watchdog: no first token / liveness in TURN_TIMEOUT_MS → abort + resend.
+    // chat_keepalive frames (worker thinking) re-arm this so a long think isn't aborted.
+    armFirstTokenTimeout(turnId, text);
     bus.post(
       buildChatRequest(
         turnId,

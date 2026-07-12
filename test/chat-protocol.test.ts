@@ -109,6 +109,7 @@ describe('isChatInbound', () => {
     expect(isChatInbound({ type: 'chat_done', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'chat_error', id: 'c', error: 'x' })).toBe(true);
     expect(isChatInbound({ type: 'chat_tool_notice', id: 'c', tool: 'grep', ok: true })).toBe(true);
+    expect(isChatInbound({ type: 'chat_keepalive', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'tool_result', id: '1' })).toBe(false);
     expect(isChatInbound(null)).toBe(false);
   });
