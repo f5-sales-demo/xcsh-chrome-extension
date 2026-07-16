@@ -74,7 +74,7 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   },
   {
     name: 'login',
-    summary: 'Drive the F5 XC OIDC/Keycloak login end-to-end.',
+    summary: 'Drive the F5 XC OIDC/Keycloak login end-to-end (production + staging consoles).',
     category: 'navigation',
     params: Type.Object({ email: Type.String(), password: Type.String(), consoleUrl: Type.String() }),
   },
