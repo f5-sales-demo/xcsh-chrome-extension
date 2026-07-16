@@ -100,7 +100,7 @@
     },
     {
       "name": "login",
-      "summary": "Drive the F5 XC OIDC/Keycloak login end-to-end.",
+      "summary": "Drive the F5 XC OIDC/Keycloak login end-to-end (production + staging consoles).",
       "category": "navigation",
       "params": {
         "type": "object",
