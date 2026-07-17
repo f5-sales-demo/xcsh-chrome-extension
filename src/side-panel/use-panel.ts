@@ -307,6 +307,12 @@ export function usePanel() {
           boundTabId.current = incomingTabId;
           void adoptCurrentConvForTenant(keyStr, incomingTabId);
         }
+        // Re-fetch page context on EVERY tab_bound (including re-broadcasts for
+        // in-tab navigation on the already-bound tab) so the panel stays aware of
+        // what the user is looking at without a manual refresh — Gemini-style.
+        if (incomingTabId === boundTabId.current) {
+          bus.post({ type: 'get_page_context', tabId: incomingTabId });
+        }
         return;
       }
       if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') return;
