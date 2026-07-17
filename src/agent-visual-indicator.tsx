@@ -193,7 +193,11 @@ chrome.runtime.onMessage.addListener(
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   function currentHeading(): string {
-    const h = document.querySelector('h1, h2, [class*="page-title"], [class*="pageTitle"]');
+    // F5 XC uses .label-object__header-title for config overlay headings (a <div>,
+    // not an <h1>). Check it first (most specific), then fall back to generic headings.
+    const h = document.querySelector(
+      '.label-object__header-title, h1, h2, [class*="page-title"], [class*="pageTitle"]',
+    );
     return h?.textContent?.trim() ?? '';
   }
 
