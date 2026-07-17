@@ -267,4 +267,50 @@ describe('panel routing UAT (#166)', () => {
 
     await waitFor(() => expect(h.api().state.active).toBeNull());
   });
+
+  it('SPA in-tab navigation updates contextMeta to the NEW page title', async () => {
+    // Reproduce: user navigates CDN → Origin Pools → HTTP LBs within the same tab.
+    // The chip (contextMeta.title) must show the CURRENT page, not the previous.
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    await driveToReady(h, [{ tenant: F5_KEY, env: 'production' }]);
+
+    // Initial state: contextMeta from driveToReady.
+    expect(h.api().state.contextMeta?.title).toBe('Home');
+
+    // Count get_page_context calls so far.
+    const before = h.posted.filter((m) => m.type === 'get_page_context').length;
+
+    // 1. SW sends chipOnly tab_bound (SPA URL change, DOM still old).
+    h.pushToPanel({
+      type: 'tab_bound',
+      tabId: 7,
+      url: 'https://f5-amer-ent.console.ves.volterra.io/web/manage/lb/origin_pools',
+      title: undefined,
+      chipOnly: true,
+    });
+
+    // chipOnly should NOT trigger get_page_context (DOM is stale).
+    expect(h.posted.filter((m) => m.type === 'get_page_context').length).toBe(before);
+
+    // 2. SW sends debounced tab_bound (SPA settled, no chipOnly).
+    h.pushToPanel({
+      type: 'tab_bound',
+      tabId: 7,
+      url: 'https://f5-amer-ent.console.ves.volterra.io/web/manage/lb/origin_pools',
+      title: 'Origin Pools',
+    });
+
+    // Panel SHOULD now call get_page_context.
+    await waitFor(() => {
+      expect(h.posted.filter((m) => m.type === 'get_page_context').length).toBeGreaterThan(before);
+    });
+
+    // 3. SW responds with the NEW page context.
+    h.pushToPanel({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/web/manage/lb/origin_pools' } });
+
+    // contextMeta.title must be the NEW page, not the old.
+    await waitFor(() => {
+      expect(h.api().state.contextMeta?.title).toBe('Origin Pools');
+    });
+  });
 });
