@@ -177,3 +177,40 @@ chrome.runtime.onMessage.addListener(
     if (msg?.type === 'overlay') showOverlay(msg);
   },
 );
+
+// ---------------------------------------------------------------------------
+// SPA content-change detection (MutationObserver)
+//
+// The F5 XC console opens config overlays, status panels, etc. WITHOUT changing
+// the URL or document.title. The only signal is a DOM mutation. We watch the
+// page's first visible heading (h1/h2) — when its text changes (e.g. "HTTP Load
+// Balancers" → "HTTP Load Balancer / ar-crud-base-lb"), we notify the SW so it
+// pushes a context refresh to the chat panel. Debounced at 1s so rapid Angular
+// render cycles don't spam the bridge.
+// ---------------------------------------------------------------------------
+{
+  let lastHeading = '';
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function currentHeading(): string {
+    const h = document.querySelector('h1, h2, [class*="page-title"], [class*="pageTitle"]');
+    return h?.textContent?.trim() ?? '';
+  }
+
+  function check(): void {
+    const h = currentHeading();
+    if (h && h !== lastHeading) {
+      lastHeading = h;
+      chrome.runtime.sendMessage({ type: 'page_content_changed' }).catch(() => {});
+    }
+  }
+
+  // Seed the initial heading so the first real change is detected.
+  lastHeading = currentHeading();
+
+  const observer = new MutationObserver(() => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(check, 1000);
+  });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+}
