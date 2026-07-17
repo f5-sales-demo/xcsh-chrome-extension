@@ -383,6 +383,9 @@ const chatPanels = new Set<chrome.runtime.Port>();
 // Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
 // busy" signal that locks the controlled tab against passive rebinding.
 let inFlightCount = 0;
+// Debounce timer for SPA navigation context pushes — the XC console uses
+// pushState so URL changes immediately but DOM settles ~1-2s later.
+let spaSettleTimer: ReturnType<typeof setTimeout> | undefined;
 
 function isInFlight(): boolean {
   return inFlightCount > 0 || turnToPort.size > 0;
@@ -3078,13 +3081,30 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     setActiveTenant(activeKey2, tabId);
     const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
     if (a.action === 'unbind') await setControlledTab(undefined);
+    // SPA live-awareness: the F5 XC console is an Angular SPA — in-app clicks use
+    // pushState, so changeInfo.url fires immediately (DOM still old) and
+    // status=complete NEVER fires (no full page load). To show the CURRENT page:
+    //   1. Push tab_bound NOW with the new URL (chip updates instantly).
+    //   2. After a debounced delay (~1.5s), push again so the panel re-fetches
+    //      page context with the NEW page's DOM/AX/title (SPA has settled).
+    if (a.action === 'keep' && tabId === targetTabId && changeInfo.url && isConsoleUrl(changeInfo.url)) {
+      // Immediate: URL chip updates right away (chipOnly — panel skips the
+      // page_context fetch since the DOM is still the old page).
+      broadcastToChatPanels({ type: 'tab_bound', tabId, url: changeInfo.url, title: undefined, chipOnly: true });
+      // Debounced: after the SPA settles, push with the real title + trigger
+      // a page_context refresh in the panel (which reads the new DOM/AX/API).
+      clearTimeout(spaSettleTimer);
+      spaSettleTimer = setTimeout(async () => {
+        if (tabId !== targetTabId) return; // tab changed while waiting
+        const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+        if (tab?.url && isConsoleUrl(tab.url)) {
+          broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab.url, title: tab.title });
+        }
+      }, 1500);
+    }
   } // end if (changeInfo.url !== undefined)
-  // When the CONTROLLED tab finishes loading a new page within the console, push
-  // a fresh context so the panel updates automatically. We fire on status=complete
-  // (not changeInfo.url) because the URL changes at navigation START but the
-  // DOM/AX/API are still the OLD page — waiting for 'complete' ensures
-  // buildPageContext reads the NEW page's content. This is the Gemini-style
-  // "live awareness."
+  // Also handle full-page loads (non-SPA navigations, e.g. initial load or
+  // hard refresh) — status=complete still fires for those.
   if (changeInfo.status === 'complete' && tabId === targetTabId) {
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (tab?.url && isConsoleUrl(tab.url)) {

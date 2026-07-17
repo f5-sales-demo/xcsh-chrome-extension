@@ -307,10 +307,11 @@ export function usePanel() {
           boundTabId.current = incomingTabId;
           void adoptCurrentConvForTenant(keyStr, incomingTabId);
         }
-        // Re-fetch page context on EVERY tab_bound (including re-broadcasts for
-        // in-tab navigation on the already-bound tab) so the panel stays aware of
-        // what the user is looking at without a manual refresh — Gemini-style.
-        if (incomingTabId === boundTabId.current) {
+        // Re-fetch page context on tab_bound — but only when the SPA has settled
+        // (chipOnly=false, the debounced push). The immediate push (chipOnly=true)
+        // only updates the URL chip so the user sees instant feedback; fetching
+        // page context NOW would read the OLD page's DOM (SPA hasn't rendered yet).
+        if (incomingTabId === boundTabId.current && !(msg as { chipOnly?: boolean }).chipOnly) {
           bus.post({ type: 'get_page_context', tabId: incomingTabId });
         }
         return;
