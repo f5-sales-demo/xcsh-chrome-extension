@@ -3045,42 +3045,51 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-  if (changeInfo.url === undefined) return;
-  // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
-  void applySidePanelGate(tabId, changeInfo.url);
-  const key2 = sessionKeyFromUrl(changeInfo.url);
-  const activeKey2 = key2 ? sessionKeyStr(key2) : null;
-  // A tab that already has a worker just changed tenant key (e.g. navigated from
-  // tenant A's console to tenant B's, or away to a non-console URL): release the
-  // stale worker (its context is the old tenant) and, for a new tenant, spawn a
-  // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
-  //
-  // Detect staleness from the REGISTRY (rebuilt from hello_acks), not prevKey:
-  // tabSessionKeys is in-memory and an MV3 suspension drops it, which previously
-  // skipped this whole block and stranded the tab on the old tenant (#166). We
-  // also EVICT the stale entry immediately so a chat turn in the race window
-  // before the old socket closes can never resolve the old-tenant worker.
-  const reTenant = manualPortPinned ? { kind: 'noop' as const } : planReTenant(registry, tabId, activeKey2);
-  if (reTenant.kind === 'retenant') {
-    nmSend({ type: 'release', sessionId: reTenant.releaseSid });
-    for (const p of reTenant.evictPorts) registry.delete(p); // manager reaps via release; onclose is idempotent
-    clearPortForTab(tabId);
-    broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
-    if (reTenant.provisionTenant) {
-      nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
-      markProvisionSent(prov, reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
+  // URL-change handling (binding, re-tenant, side-panel gating) needs the URL
+  // early. The context-push to the panel waits for status=complete (below).
+  if (changeInfo.url === undefined && changeInfo.status === undefined) return;
+  if (changeInfo.url !== undefined) {
+    // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
+    void applySidePanelGate(tabId, changeInfo.url);
+    const key2 = sessionKeyFromUrl(changeInfo.url);
+    const activeKey2 = key2 ? sessionKeyStr(key2) : null;
+    // A tab that already has a worker just changed tenant key (e.g. navigated from
+    // tenant A's console to tenant B's, or away to a non-console URL): release the
+    // stale worker (its context is the old tenant) and, for a new tenant, spawn a
+    // fresh one keyed by the SAME per-tab sid — the manager re-keys that tab's slot.
+    //
+    // Detect staleness from the REGISTRY (rebuilt from hello_acks), not prevKey:
+    // tabSessionKeys is in-memory and an MV3 suspension drops it, which previously
+    // skipped this whole block and stranded the tab on the old tenant (#166). We
+    // also EVICT the stale entry immediately so a chat turn in the race window
+    // before the old socket closes can never resolve the old-tenant worker.
+    const reTenant = manualPortPinned ? { kind: 'noop' as const } : planReTenant(registry, tabId, activeKey2);
+    if (reTenant.kind === 'retenant') {
+      nmSend({ type: 'release', sessionId: reTenant.releaseSid });
+      for (const p of reTenant.evictPorts) registry.delete(p); // manager reaps via release; onclose is idempotent
+      clearPortForTab(tabId);
+      broadcastBridges(); // the old tenant leaves liveTenants at once (re-gates the panel)
+      if (reTenant.provisionTenant) {
+        nmSend({ type: 'provision', sessionId: reTenant.releaseSid, tenant: reTenant.provisionTenant });
+        markProvisionSent(prov, reTenant.releaseSid, Date.now()); // TTFT: start provision_to_worker
+      }
     }
-  }
-  trackTabSessionKey(tabId, activeKey2);
-  setActiveTenant(activeKey2, tabId);
-  const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
-  if (a.action === 'unbind') await setControlledTab(undefined);
-  // When the CONTROLLED tab navigates within the console (binding stays 'keep'),
-  // push the new URL so the panel updates its context chip automatically — without
-  // requiring a manual refresh click. This is the Gemini-style "live awareness."
-  if (a.action === 'keep' && tabId === targetTabId && changeInfo.url) {
+    trackTabSessionKey(tabId, activeKey2);
+    setActiveTenant(activeKey2, tabId);
+    const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
+    if (a.action === 'unbind') await setControlledTab(undefined);
+  } // end if (changeInfo.url !== undefined)
+  // When the CONTROLLED tab finishes loading a new page within the console, push
+  // a fresh context so the panel updates automatically. We fire on status=complete
+  // (not changeInfo.url) because the URL changes at navigation START but the
+  // DOM/AX/API are still the OLD page — waiting for 'complete' ensures
+  // buildPageContext reads the NEW page's content. This is the Gemini-style
+  // "live awareness."
+  if (changeInfo.status === 'complete' && tabId === targetTabId) {
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
-    broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url ?? changeInfo.url, title: tab?.title });
+    if (tab?.url && isConsoleUrl(tab.url)) {
+      broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab.url, title: tab.title });
+    }
   }
 });
 
