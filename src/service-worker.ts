@@ -3050,7 +3050,26 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // URL-change handling (binding, re-tenant, side-panel gating) needs the URL
   // early. The context-push to the panel waits for status=complete (below).
-  if (changeInfo.url === undefined && changeInfo.status === undefined) return;
+  // Also let TITLE-only changes through for the controlled tab — the F5 XC SPA
+  // updates document.title when opening config overlays/modals WITHOUT changing
+  // the URL, so a title change is the signal that the user is looking at
+  // something different (e.g. "Manage Configuration" on a specific LB).
+  const isTitleChange =
+    changeInfo.title !== undefined && changeInfo.url === undefined && changeInfo.status === undefined;
+  if (changeInfo.url === undefined && changeInfo.status === undefined && !isTitleChange) return;
+  // Title-only change on the controlled tab → debounced context refresh (same
+  // mechanism as the SPA URL-change push: wait for the DOM to settle, then push).
+  if (isTitleChange && tabId === targetTabId) {
+    clearTimeout(spaSettleTimer);
+    spaSettleTimer = setTimeout(async () => {
+      if (tabId !== targetTabId) return;
+      const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+      if (tab?.url && isConsoleUrl(tab.url)) {
+        broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab.url, title: tab.title });
+      }
+    }, 1500);
+    return; // title-only: skip the URL/status blocks below
+  }
   if (changeInfo.url !== undefined) {
     // Re-gate the panel when a tab navigates (e.g. blank tab → console, or away).
     void applySidePanelGate(tabId, changeInfo.url);
