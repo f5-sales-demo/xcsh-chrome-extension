@@ -523,6 +523,21 @@ chrome.debugger.onEvent.addListener((source, method, eventParams) => {
                 resourceType: pend.resourceType,
                 body: JSON.parse(body),
               });
+              // A new XC API resource was captured — if it's the controlled tab,
+              // push a context refresh so the chat panel sees the new resource's
+              // JSON (e.g. when "Manage Configuration" loads the resource config
+              // without changing the URL). This is the definitive signal that the
+              // user is now looking at a specific resource's data.
+              if (pend.tabId === targetTabId) {
+                clearTimeout(spaSettleTimer);
+                spaSettleTimer = setTimeout(async () => {
+                  if (pend.tabId !== targetTabId) return;
+                  const tab = await chrome.tabs.get(pend.tabId).catch(() => undefined);
+                  if (tab?.url && isConsoleUrl(tab.url)) {
+                    broadcastToChatPanels({ type: 'tab_bound', tabId: pend.tabId, url: tab.url, title: tab.title });
+                  }
+                }, 500);
+              }
             } catch {
               /* non-JSON despite mime — ignore */
             }
