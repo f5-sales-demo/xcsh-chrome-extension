@@ -3075,6 +3075,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   setActiveTenant(activeKey2, tabId);
   const a = decideBinding(bindingState(), { kind: 'updated', tabId, url: changeInfo.url });
   if (a.action === 'unbind') await setControlledTab(undefined);
+  // When the CONTROLLED tab navigates within the console (binding stays 'keep'),
+  // push the new URL so the panel updates its context chip automatically — without
+  // requiring a manual refresh click. This is the Gemini-style "live awareness."
+  if (a.action === 'keep' && tabId === targetTabId && changeInfo.url) {
+    const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+    broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab?.url ?? changeInfo.url, title: tab?.title });
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
