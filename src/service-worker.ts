@@ -940,6 +940,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     stopAgent();
     return;
   }
+
+  // Content-script MutationObserver detected a heading change (SPA overlay
+  // opened/closed without a URL or title change). Debounce a context refresh
+  // so the chat panel sees the new page content.
+  if (msg.type === 'page_content_changed' && _sender.tab?.id !== undefined) {
+    const tabId = _sender.tab.id;
+    if (tabId === targetTabId) {
+      clearTimeout(spaSettleTimer);
+      spaSettleTimer = setTimeout(async () => {
+        if (tabId !== targetTabId) return;
+        const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+        if (tab?.url && isConsoleUrl(tab.url)) {
+          broadcastToChatPanels({ type: 'tab_bound', tabId, url: tab.url, title: tab.title });
+        }
+      }, 500); // shorter than SPA nav (overlay is already rendered when heading changes)
+    }
+    return;
+  }
 });
 
 // --- Chat side panel Port --------------------------------------------------
