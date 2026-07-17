@@ -298,7 +298,10 @@ export function usePanel() {
         return;
       }
       if (msg.type === 'tab_bound') {
-        if (!stateRef.current.active) return;
+        // Gate on the activation phase (is the panel ready?), NOT on `active`
+        // (is there an in-flight chat turn?). The panel must update page context
+        // on SPA navigation even when the user is just browsing (no active turn).
+        if (stateRef.current.activation.phase === 'inactive') return;
         const incomingTabId = msg.tabId as number;
         const key = sessionKeyFromUrl(msg.url as string | undefined);
         const keyStr = key ? sessionKeyStr(key) : null;
