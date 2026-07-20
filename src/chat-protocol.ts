@@ -107,6 +107,66 @@ export interface ChatKeepaliveMsg {
   id: string;
 }
 
+// --- Host-tool channel (contract 1.8.0) --------------------------------------
+// Lets the agent invoke tools that must run inside the host UI (an Office task
+// pane: read/write ranges, insert slides, draft mail) over the WS bridge — the
+// same host-tool pattern the stdio JSONL RPC already carries. Field-for-field
+// with xcsh's stdio `RpcHostTool*` vocabulary (one vocabulary across transports).
+// Direction: set_host_tools / host_tool_result / host_tool_update are panel→xcsh;
+// host_tool_call / host_tool_cancel are xcsh→panel.
+
+export interface HostToolDefinition {
+  name: string;
+  label?: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  hidden?: boolean;
+}
+
+/** An agent tool result: `content` is an array of blocks (e.g. `{type:'text',text}`). */
+export interface HostToolResultData {
+  content: unknown[];
+  details?: Record<string, unknown>;
+}
+
+export interface SetHostToolsMsg {
+  type: 'set_host_tools';
+  tools: HostToolDefinition[];
+}
+/** xcsh→panel ack of a `set_host_tools` registration (names actually registered),
+ * so the client can await it before sending its first prompt. */
+export interface SetHostToolsAckMsg {
+  type: 'set_host_tools_ack';
+  toolNames: string[];
+}
+export interface HostToolCallMsg {
+  type: 'host_tool_call';
+  id: string;
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+}
+export interface HostToolUpdateMsg {
+  type: 'host_tool_update';
+  id: string;
+  partialResult: HostToolResultData;
+}
+export interface HostToolResultMsg {
+  type: 'host_tool_result';
+  id: string;
+  result: HostToolResultData;
+  isError?: boolean;
+}
+export interface HostToolCancelMsg {
+  type: 'host_tool_cancel';
+  id: string;
+  targetId: string;
+}
+
+// NOTE: the host-tool frames (set_host_tools_ack / host_tool_call /
+// host_tool_cancel) also travel xcsh→panel, but wiring them into the panel's
+// `ChatInbound` dispatch (which is chat-turn `id`-keyed) is runtime routing —
+// tracked as the companion issue. This file only defines their contract shapes.
 export type ChatInbound = ChatStreamMsg | ChatToolNoticeMsg | ChatKeepaliveMsg;
 
 export interface ChatTurnState {
@@ -162,6 +222,10 @@ export function isChatInbound(msg: unknown): msg is ChatInbound {
   if (!msg || typeof msg !== 'object') return false;
   const t = (msg as { type?: unknown }).type;
   return (
-    t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive'
+    t === 'chat_delta' ||
+    t === 'chat_done' ||
+    t === 'chat_error' ||
+    t === 'chat_tool_notice' ||
+    t === 'chat_keepalive'
   );
 }
