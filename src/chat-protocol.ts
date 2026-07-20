@@ -222,10 +222,6 @@ export function isChatInbound(msg: unknown): msg is ChatInbound {
   if (!msg || typeof msg !== 'object') return false;
   const t = (msg as { type?: unknown }).type;
   return (
-    t === 'chat_delta' ||
-    t === 'chat_done' ||
-    t === 'chat_error' ||
-    t === 'chat_tool_notice' ||
-    t === 'chat_keepalive'
+    t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive'
   );
 }
