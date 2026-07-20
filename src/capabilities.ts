@@ -23,10 +23,12 @@ import { INTERACTION_MODES } from './chat-protocol';
  * 1.6.0: additive optional `reason` on chat_error (machine-readable failure cause).
  * 1.7.0: additive `chat_keepalive` liveness frame (worker proof-of-life during a
  *        long pre-first-token think, so the panel doesn't fire first-token-timeout).
- * 1.8.0: additive host-tool channel (set_host_tools / host_tool_call /
- *        host_tool_update / host_tool_result / host_tool_cancel) — the agent
- *        invokes tools that must run inside the host UI (e.g. an Office task pane)
- *        over the WS bridge, mirroring the stdio RPC host-tool vocabulary. */
+ * 1.8.0: additive host-tool channel (set_host_tools / set_host_tools_ack /
+ *        set_host_tools_error / host_tool_call / host_tool_update /
+ *        host_tool_result / host_tool_cancel) — the agent invokes tools that must
+ *        run inside the host UI (e.g. an Office task pane) over the WS bridge,
+ *        mirroring the stdio RPC host-tool vocabulary. set_host_tools_error nacks
+ *        a bad registration so a client awaiting the ack doesn't hang. */
 export const CONTRACT_VERSION = '1.8.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
@@ -405,6 +407,7 @@ export const FEATURES = {
       'chat_tool_notice',
       'set_host_tools',
       'set_host_tools_ack',
+      'set_host_tools_error',
       'host_tool_call',
       'host_tool_update',
       'host_tool_result',
