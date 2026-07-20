@@ -139,6 +139,13 @@ export interface SetHostToolsAckMsg {
   type: 'set_host_tools_ack';
   toolNames: string[];
 }
+/** xcsh→panel nack of a `set_host_tools` registration that failed to normalize
+ * (bad definition, name conflict) — emitted instead of the ack so a client
+ * awaiting registration gets a clear error rather than hanging. */
+export interface SetHostToolsErrorMsg {
+  type: 'set_host_tools_error';
+  error: string;
+}
 export interface HostToolCallMsg {
   type: 'host_tool_call';
   id: string;
