@@ -115,8 +115,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.7.0 (additive chat_keepalive liveness frame)', () => {
-    expect(CONTRACT_VERSION).toBe('1.7.0');
+  it('CONTRACT_VERSION is 1.8.0 (additive host-tool channel)', () => {
+    expect(CONTRACT_VERSION).toBe('1.8.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {
@@ -185,9 +185,16 @@ describe('capabilities — features & manifest', () => {
       'chat_error',
       'chat_stop',
       'chat_tool_notice',
+      'set_host_tools',
+      'set_host_tools_ack',
+      'host_tool_call',
+      'host_tool_update',
+      'host_tool_result',
+      'host_tool_cancel',
     ]);
     expect(chat?.messages).toContain('chat_stop');
     expect(chat?.messages).toContain('chat_tool_notice');
+    expect(chat?.messages).toContain('host_tool_call');
   });
 
   it('buildCapabilities assembles the runtime manifest', () => {

@@ -22,8 +22,12 @@ import { INTERACTION_MODES } from './chat-protocol';
 /** Bumped on any change to the tool/feature contract so xcsh can detect drift.
  * 1.6.0: additive optional `reason` on chat_error (machine-readable failure cause).
  * 1.7.0: additive `chat_keepalive` liveness frame (worker proof-of-life during a
- *        long pre-first-token think, so the panel doesn't fire first-token-timeout). */
-export const CONTRACT_VERSION = '1.7.0';
+ *        long pre-first-token think, so the panel doesn't fire first-token-timeout).
+ * 1.8.0: additive host-tool channel (set_host_tools / host_tool_call /
+ *        host_tool_update / host_tool_result / host_tool_cancel) — the agent
+ *        invokes tools that must run inside the host UI (e.g. an Office task pane)
+ *        over the WS bridge, mirroring the stdio RPC host-tool vocabulary. */
+export const CONTRACT_VERSION = '1.8.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -392,7 +396,20 @@ export const FEATURES = {
     contextTool: 'get_page_context',
     transport: 'websocket-bridge',
     modes: ['educational', 'presentation', 'configuration', 'screenshot', 'annotation'] as const,
-    messages: ['chat_request', 'chat_delta', 'chat_done', 'chat_error', 'chat_stop', 'chat_tool_notice'] as const,
+    messages: [
+      'chat_request',
+      'chat_delta',
+      'chat_done',
+      'chat_error',
+      'chat_stop',
+      'chat_tool_notice',
+      'set_host_tools',
+      'set_host_tools_ack',
+      'host_tool_call',
+      'host_tool_update',
+      'host_tool_result',
+      'host_tool_cancel',
+    ] as const,
     description:
       'User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams chat_delta tokens then a terminal chat_done (with reference links) or chat_error. Chat ids are prefixed "c-". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel.',
     promptHints: CHAT_PROMPT_HINTS,

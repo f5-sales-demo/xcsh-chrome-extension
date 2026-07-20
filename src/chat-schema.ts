@@ -18,6 +18,12 @@ import {
   type ChatRequestMsg,
   type ChatStopMsg,
   type ChatToolNoticeMsg,
+  type HostToolCallMsg,
+  type HostToolCancelMsg,
+  type HostToolResultMsg,
+  type HostToolUpdateMsg,
+  type SetHostToolsAckMsg,
+  type SetHostToolsMsg,
 } from './chat-protocol';
 import type { PageContextSnapshot } from './context-snapshot';
 
@@ -105,6 +111,60 @@ export const ChatKeepaliveSchema = Type.Object({
   id: ChatId,
 });
 
+// --- Host-tool channel schemas (contract 1.8.0) ------------------------------
+// Host-tool ids are host-minted opaque strings (NOT `c-` prefixed chat ids).
+
+export const HostToolDefinitionSchema = Type.Object({
+  name: Type.String(),
+  label: Type.Optional(Type.String()),
+  description: Type.String(),
+  parameters: Type.Record(Type.String(), Type.Unknown()),
+  hidden: Type.Optional(Type.Boolean()),
+});
+
+/** An agent tool result: `content` is an array of typed blocks (e.g. text). */
+export const HostToolResultDataSchema = Type.Object({
+  content: Type.Array(Type.Object({ type: Type.String() }, { additionalProperties: true })),
+  details: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+
+export const SetHostToolsSchema = Type.Object({
+  type: Type.Literal('set_host_tools'),
+  tools: Type.Array(HostToolDefinitionSchema),
+});
+
+export const SetHostToolsAckSchema = Type.Object({
+  type: Type.Literal('set_host_tools_ack'),
+  toolNames: Type.Array(Type.String()),
+});
+
+export const HostToolCallSchema = Type.Object({
+  type: Type.Literal('host_tool_call'),
+  id: Type.String(),
+  toolCallId: Type.String(),
+  toolName: Type.String(),
+  arguments: Type.Record(Type.String(), Type.Unknown()),
+});
+
+export const HostToolUpdateSchema = Type.Object({
+  type: Type.Literal('host_tool_update'),
+  id: Type.String(),
+  partialResult: HostToolResultDataSchema,
+});
+
+export const HostToolResultSchema = Type.Object({
+  type: Type.Literal('host_tool_result'),
+  id: Type.String(),
+  result: HostToolResultDataSchema,
+  isError: Type.Optional(Type.Boolean()),
+});
+
+export const HostToolCancelSchema = Type.Object({
+  type: Type.Literal('host_tool_cancel'),
+  id: Type.String(),
+  targetId: Type.String(),
+});
+
 /** Wire-message schemas keyed by `type`. */
 export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_request: ChatRequestSchema,
@@ -114,6 +174,12 @@ export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_error: ChatErrorSchema,
   chat_tool_notice: ChatToolNoticeSchema,
   chat_keepalive: ChatKeepaliveSchema,
+  set_host_tools: SetHostToolsSchema,
+  set_host_tools_ack: SetHostToolsAckSchema,
+  host_tool_call: HostToolCallSchema,
+  host_tool_update: HostToolUpdateSchema,
+  host_tool_result: HostToolResultSchema,
+  host_tool_cancel: HostToolCancelSchema,
 };
 
 // --- Golden examples (independent oracles, validated against the schemas) -----
@@ -171,6 +237,42 @@ const chatError: ChatErrorMsg = {
 const chatToolNotice: ChatToolNoticeMsg = { type: 'chat_tool_notice', id: 'c-1111', tool: 'navigate', ok: true };
 const chatKeepalive: ChatKeepaliveMsg = { type: 'chat_keepalive', id: 'c-1111' };
 
+// Host-tool channel (contract 1.8.0). Host-tool ids are host-minted opaque strings.
+const setHostTools: SetHostToolsMsg = {
+  type: 'set_host_tools',
+  tools: [
+    {
+      name: 'office_read_range',
+      label: 'Read range',
+      description: 'Read a cell range from the active worksheet.',
+      parameters: { type: 'object', properties: { range: { type: 'string' } }, required: ['range'] },
+    },
+  ],
+};
+const setHostToolsAck: SetHostToolsAckMsg = { type: 'set_host_tools_ack', toolNames: ['office_read_range'] };
+const hostToolCall: HostToolCallMsg = {
+  type: 'host_tool_call',
+  id: '7295551234567890',
+  toolCallId: 'call_abc',
+  toolName: 'office_read_range',
+  arguments: { range: 'A1:B2' },
+};
+const hostToolUpdate: HostToolUpdateMsg = {
+  type: 'host_tool_update',
+  id: '7295551234567890',
+  partialResult: { content: [{ type: 'text', text: 'reading range…' }] },
+};
+const hostToolResult: HostToolResultMsg = {
+  type: 'host_tool_result',
+  id: '7295551234567890',
+  result: { content: [{ type: 'text', text: 'A1=1, B1=2, A2=3, B2=4' }] },
+};
+const hostToolCancel: HostToolCancelMsg = {
+  type: 'host_tool_cancel',
+  id: '7295551234567891',
+  targetId: '7295551234567890',
+};
+
 export const CHAT_EXAMPLES = {
   valid: {
     page_context_snapshot: SNAPSHOT_EXAMPLE,
@@ -184,6 +286,12 @@ export const CHAT_EXAMPLES = {
     chat_error: chatError,
     chat_tool_notice: chatToolNotice,
     chat_keepalive: chatKeepalive,
+    set_host_tools: setHostTools,
+    set_host_tools_ack: setHostToolsAck,
+    host_tool_call: hostToolCall,
+    host_tool_update: hostToolUpdate,
+    host_tool_result: hostToolResult,
+    host_tool_cancel: hostToolCancel,
   },
   // Invalid examples are intentionally malformed; each `schema` names the schema
   // it must be REJECTED by.
@@ -197,5 +305,20 @@ export const CHAT_EXAMPLES = {
     },
     { schema: 'chat_delta', why: 'missing seq', value: { type: 'chat_delta', id: 'c-1', delta: 'x' } },
     { schema: 'page_context_snapshot', why: 'wrong version', value: { ...SNAPSHOT_EXAMPLE, v: 2 } },
+    {
+      schema: 'set_host_tools',
+      why: 'tool missing description',
+      value: { type: 'set_host_tools', tools: [{ name: 'x', parameters: {} }] },
+    },
+    {
+      schema: 'host_tool_call',
+      why: 'missing toolName',
+      value: { type: 'host_tool_call', id: '1', toolCallId: 'c', arguments: {} },
+    },
+    {
+      schema: 'host_tool_result',
+      why: 'result.content is not an array',
+      value: { type: 'host_tool_result', id: '1', result: { content: 'nope' } },
+    },
   ] as const,
 };
