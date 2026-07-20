@@ -23,6 +23,7 @@ import {
   type HostToolResultMsg,
   type HostToolUpdateMsg,
   type SetHostToolsAckMsg,
+  type SetHostToolsErrorMsg,
   type SetHostToolsMsg,
 } from './chat-protocol';
 import type { PageContextSnapshot } from './context-snapshot';
@@ -138,6 +139,11 @@ export const SetHostToolsAckSchema = Type.Object({
   toolNames: Type.Array(Type.String()),
 });
 
+export const SetHostToolsErrorSchema = Type.Object({
+  type: Type.Literal('set_host_tools_error'),
+  error: Type.String(),
+});
+
 export const HostToolCallSchema = Type.Object({
   type: Type.Literal('host_tool_call'),
   id: Type.String(),
@@ -176,6 +182,7 @@ export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_keepalive: ChatKeepaliveSchema,
   set_host_tools: SetHostToolsSchema,
   set_host_tools_ack: SetHostToolsAckSchema,
+  set_host_tools_error: SetHostToolsErrorSchema,
   host_tool_call: HostToolCallSchema,
   host_tool_update: HostToolUpdateSchema,
   host_tool_result: HostToolResultSchema,
@@ -250,6 +257,10 @@ const setHostTools: SetHostToolsMsg = {
   ],
 };
 const setHostToolsAck: SetHostToolsAckMsg = { type: 'set_host_tools_ack', toolNames: ['office_read_range'] };
+const setHostToolsError: SetHostToolsErrorMsg = {
+  type: 'set_host_tools_error',
+  error: 'Host tool "office_read_range" must provide a non-empty description',
+};
 const hostToolCall: HostToolCallMsg = {
   type: 'host_tool_call',
   id: '7295551234567890',
@@ -288,6 +299,7 @@ export const CHAT_EXAMPLES = {
     chat_keepalive: chatKeepalive,
     set_host_tools: setHostTools,
     set_host_tools_ack: setHostToolsAck,
+    set_host_tools_error: setHostToolsError,
     host_tool_call: hostToolCall,
     host_tool_update: hostToolUpdate,
     host_tool_result: hostToolResult,
