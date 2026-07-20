@@ -23,9 +23,14 @@ describe('chat conformance — schemas + golden examples', () => {
     }
   });
 
-  it('all chat message ids use the c- prefix', () => {
+  it('all chat-turn message ids use the c- prefix', () => {
     for (const [name, example] of Object.entries(CHAT_EXAMPLES.valid)) {
       if (name === 'page_context_snapshot') continue;
+      // The c- prefix invariant is a chat-TURN id rule. Host-tool frames use a
+      // disjoint, host-minted id space (like tool_request ids), and some carry no
+      // id at all (set_host_tools / set_host_tools_ack) — so only assert on chat_*.
+      const type = (example as { type: string }).type;
+      if (!type.startsWith('chat_')) continue;
       expect((example as { id: string }).id.startsWith('c-')).toBe(true);
     }
   });
