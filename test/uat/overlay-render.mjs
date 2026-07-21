@@ -133,8 +133,10 @@ const q = (page) =>
         ms: g.querySelector('.ov-ms')?.textContent ?? '',
       })),
       retry: !!document.querySelector('.ov-retry'),
-      sendDisabled: document.querySelector('#send')?.hasAttribute('disabled') ?? null,
-      chip: document.querySelector('#ctx-chip')?.textContent ?? '',
+      // The shared Composer locks by making its contenteditable editor non-editable
+      // (its send button also gates on non-empty text, so it can't signal the lock).
+      inputLocked: document.querySelector('[role="textbox"]')?.getAttribute('contenteditable') === 'false',
+      chip: document.querySelector('.chip .title')?.textContent ?? '',
       postedTypes: globalThis.__xcsh?.postedTypes?.() ?? [],
     };
   });
@@ -174,7 +176,7 @@ async function main() {
       s.gates[0]?.label === 'connecting to xcsh…',
       s.gates.map((g) => g.label).join(' | '),
     );
-    ok('input locked while readying', s.sendDisabled === true, `sendDisabled=${s.sendDisabled}`);
+    ok('input locked while readying', s.inputLocked === true, `inputLocked=${s.inputLocked}`);
     ok(
       'overlay actually paints (has box)',
       await page.evaluate(() => {
@@ -205,7 +207,7 @@ async function main() {
     await push(page, { type: 'page_context', snapshot: { title: 'Acme Console', path: '/web/home' }, reqId });
     ok('overlay dismissed at ready', await waitFor(page, (s) => s.overlay === false));
     s = await q(page);
-    ok('input enabled at ready', s.sendDisabled === false, `sendDisabled=${s.sendDisabled}`);
+    ok('input enabled at ready', s.inputLocked === false, `inputLocked=${s.inputLocked}`);
     ok('page chip shows the driven page', /Acme Console/.test(s.chip), s.chip);
     await page.screenshot({ path: join(ARTIFACTS, '2-ready.png') });
 

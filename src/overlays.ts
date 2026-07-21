@@ -15,7 +15,7 @@
  */
 
 import { mountOverlay } from './overlay/mount';
-import { FONT_STACK } from './ui/theme/tokens';
+import { FONT_STACK } from './vendor/chat-ui/theme/tokens';
 
 const RED = '#ca260a'; // F5 / xcsh red
 const RING_BLUE = '#2f80ed'; // click ripple

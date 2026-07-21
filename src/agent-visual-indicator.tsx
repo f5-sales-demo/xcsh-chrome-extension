@@ -29,12 +29,13 @@ import { render } from 'preact';
 import { F5_LOGO_DATA_URI } from './f5-logo';
 import { createEnvelope, type EnvelopeEffects } from './indicator-envelope';
 import { showOverlay } from './overlays';
-import { COLORS, FONT_STACK, injectFontFaces } from './ui/theme/tokens';
+import { extUrl } from './ui/ext-url';
+import { COLORS, FONT_STACK, injectFontFaces } from './vendor/chat-ui/theme/tokens';
 
 // Register the bundled MesloLGS NF at the HOST PAGE's document level so the
 // Shadow-DOM badge/overlays (whose `@font-face` rules would be ignored inside the
 // shadow root) inherit the face. Cheap, idempotent; runs once per matched page.
-injectFontFaces(document);
+injectFontFaces(document, extUrl);
 
 const SCANNER_ID = '__xcsh-agent-scanner';
 const BADGE_ID = '__xcsh-agent-badge';

@@ -44,7 +44,9 @@ describe('side-panel App shell', () => {
     // so a leaked composer from another test would make a body-scoped
     // getByPlaceholderText match multiple and throw.
     expect(container.querySelector('.chip')).toBeTruthy();
-    const input = container.querySelector<HTMLTextAreaElement>('textarea#input');
-    expect(input?.placeholder).toMatch(/ask xcsh/i);
+    // The shared Composer's editor is a contenteditable div (role=textbox), with
+    // the prompt on `data-placeholder` (not a textarea `placeholder`).
+    const input = container.querySelector<HTMLElement>('[role="textbox"][aria-label="Message input"]');
+    expect(input?.getAttribute('data-placeholder')).toMatch(/ask xcsh/i);
   });
 });

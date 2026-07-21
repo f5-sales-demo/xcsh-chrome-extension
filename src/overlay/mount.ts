@@ -9,7 +9,7 @@
  */
 import { h, render } from 'preact';
 import { type OverlaySpec, planOverlay } from '../overlays';
-import { injectTokens } from '../ui/theme/tokens';
+import { injectTokens } from '../vendor/chat-ui/theme/tokens';
 
 export function mountOverlay(spec: OverlaySpec): void {
   const plan = planOverlay(spec);

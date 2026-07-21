@@ -18,8 +18,8 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "paths": {
-      "react": ["./node_modules/preact/compat"],
-      "react-dom": ["./node_modules/preact/compat"],
+      "react": ["./node_modules/preact/compat/dist/compat.mjs"],
+      "react-dom": ["./node_modules/preact/compat/dist/compat.mjs"],
       "react/jsx-runtime": ["./node_modules/preact/jsx-runtime"]
     }
   },
