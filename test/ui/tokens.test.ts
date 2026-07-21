@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'bun:test';
-import { COLORS, cssVars, fontFaceCss, GLYPHS, injectFontFaces, injectTokens } from '../../src/ui/theme/tokens';
+import {
+  COLORS,
+  cssVars,
+  fontFaceCss,
+  GLYPHS,
+  injectFontFaces,
+  injectTokens,
+} from '../../src/vendor/chat-ui/theme/tokens';
 
+// The extension's single token source is now the vendored shared design system.
 describe('theme tokens', () => {
   it('carries the xcsh F5 palette', () => {
     expect(COLORS.f5Red).toBe('#ca260a');

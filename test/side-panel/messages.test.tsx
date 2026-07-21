@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import { fireEvent, render } from '@testing-library/preact';
-import { AssistantMessage, ErrorMessage, ToolMessage, UserMessage } from '../../src/side-panel/components/messages';
+import { AssistantMessage, ErrorMessage, ToolMessage, UserMessage } from '../../src/vendor/chat-ui';
 
+// These render the VENDORED shared message components under preact/compat — the
+// Phase-5 interop regression proof (the components themselves are unit-tested at
+// their xcsh home in React).
 describe('transcript messages', () => {
   it('renders assistant markdown as HTML via renderMarkdown', () => {
     const { container } = render(<AssistantMessage text="**bold**" />);

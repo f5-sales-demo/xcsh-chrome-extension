@@ -14,8 +14,8 @@ import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { PANEL_CSS } from '../../src/side-panel/panel-style';
-import { cssVars, fontFaceCss } from '../../src/ui/theme/tokens';
+import { PANEL_CSS } from '../../src/vendor/chat-ui/theme/panel.css';
+import { cssVars, fontFaceCss } from '../../src/vendor/chat-ui/theme/tokens';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');

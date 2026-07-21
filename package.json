@@ -8,7 +8,7 @@
     "build:dev": "bun build.ts && node scripts/inject-key.mjs",
     "watch:dev": "node scripts/dev-watch.mjs",
     "test": "bun test",
-    "check:types": "tsc --noEmit",
+    "check:types": "tsc -p tsconfig.typecheck.json --noEmit",
     "uat:overlay": "bun run build:dev && node test/uat/overlay-render.mjs",
     "uat:statusbar": "bun test/uat/statusbar-powerline.mjs"
   },

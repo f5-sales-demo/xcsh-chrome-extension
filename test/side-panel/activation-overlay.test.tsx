@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
 import { activationReducer, initActivation } from '../../src/side-panel/activation';
-import { ActivationOverlay } from '../../src/side-panel/components/ActivationOverlay';
+import { activationToGates, overlayBlocked } from '../../src/side-panel/adapt';
+import { ActivationOverlay } from '../../src/vendor/chat-ui';
 
 afterEach(cleanup);
+
+// Render the VENDORED overlay fed by the Chrome adapter (activation → gates[] +
+// blocked) under preact/compat — proves the shared overlay + the adapter's gate
+// label copy together reproduce the old local render.
+const overlay = (a: ReturnType<typeof initActivation>, onRetry: () => void) => (
+  <ActivationOverlay gates={activationToGates(a)} blocked={overlayBlocked(a)} onRetry={onRetry} />
+);
 
 // bridge passed (ms 0, startedAt===now on a connected reset), worker active → readying
 const readying = () =>
@@ -27,7 +35,7 @@ const disconnected = () =>
 
 describe('ActivationOverlay', () => {
   it('shows the title, the passed bridge label + frozen ms, the active worker label, and no Retry while readying', () => {
-    render(<ActivationOverlay activation={readying()} onRetry={() => {}} />);
+    render(overlay(readying(), () => {}));
     expect(screen.getByText('getting ready…')).toBeTruthy();
     expect(screen.getByText('bridge connected')).toBeTruthy();
     expect(screen.getByText('0 ms')).toBeTruthy();
@@ -37,7 +45,7 @@ describe('ActivationOverlay', () => {
 
   it('shows the hard-stall worker line and a Retry button that fires onRetry when blocked', () => {
     const onRetry = mock(() => {});
-    render(<ActivationOverlay activation={blocked()} onRetry={onRetry} />);
+    render(overlay(blocked(), onRetry));
     expect(screen.getByText("xcsh didn't start")).toBeTruthy();
     fireEvent.click(screen.getByText('Retry'));
     expect(onRetry).toHaveBeenCalledTimes(1);
@@ -45,7 +53,7 @@ describe('ActivationOverlay', () => {
 
   it('shows the bridge-stalled line and a Retry button that fires onRetry when disconnected', () => {
     const onRetry = mock(() => {});
-    render(<ActivationOverlay activation={disconnected()} onRetry={onRetry} />);
+    render(overlay(disconnected(), onRetry));
     expect(screen.getByText('xcsh not connected — start the CLI')).toBeTruthy();
     fireEvent.click(screen.getByText('Retry'));
     expect(onRetry).toHaveBeenCalledTimes(1);
