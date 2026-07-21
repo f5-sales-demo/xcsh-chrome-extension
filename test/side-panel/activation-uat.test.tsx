@@ -65,10 +65,13 @@ const lastReqId = (posted: Record<string, unknown>[]) =>
     | number
     | undefined;
 const txt = (c: Element) => c.textContent ?? '';
-const sendDisabled = (c: Element) =>
-  (c.querySelector('#send') as HTMLButtonElement | null)?.hasAttribute('disabled') ?? false;
+// The shared Composer locks by making its contenteditable editor non-editable
+// (`contentEditable={!disabled}`) — the faithful "input locked" signal (its send
+// button also gates on non-empty text, so it can't stand in for the lock).
+const inputLocked = (c: Element) =>
+  (c.querySelector('[role="textbox"]') as HTMLElement | null)?.getAttribute('contenteditable') === 'false';
 const placeholder = (c: Element) =>
-  (c.querySelector('#input') as HTMLTextAreaElement | null)?.getAttribute('placeholder');
+  (c.querySelector('[role="textbox"]') as HTMLElement | null)?.getAttribute('data-placeholder');
 
 const NON_TENANT_TAB = { id: 9, url: 'https://example.com/some/page' };
 
@@ -83,7 +86,7 @@ describe('activation readiness UAT', () => {
     const h = mount(F5_TAB);
     await settle(); // boot reset → bridge active (status not yet received)
     expect(txt(h.container)).toContain('getting ready…');
-    expect(sendDisabled(h.container)).toBe(true);
+    expect(inputLocked(h.container)).toBe(true);
 
     h.push({ type: 'status', connected: true }); // bridge passes → worker active
     await settle();
@@ -100,7 +103,7 @@ describe('activation readiness UAT', () => {
     h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId });
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…');
-    expect(sendDisabled(h.container)).toBe(false);
+    expect(inputLocked(h.container)).toBe(false);
 
     const gates = h.posted.filter((m) => m.type === 'activation_timing').map((m) => m.gate);
     expect(gates).toEqual(['bridge', 'worker', 'page']);
@@ -129,7 +132,7 @@ describe('activation readiness UAT', () => {
     jest.advanceTimersByTime(5_000);
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…');
-    expect(sendDisabled(h.container)).toBe(false);
+    expect(inputLocked(h.container)).toBe(false);
     expect(txt(h.container)).toContain('page unavailable');
   });
 
@@ -150,7 +153,7 @@ describe('activation readiness UAT', () => {
     jest.advanceTimersByTime(30_000);
     await settle();
     expect(txt(h.container)).toContain("xcsh didn't start");
-    expect(sendDisabled(h.container)).toBe(true);
+    expect(inputLocked(h.container)).toBe(true);
     const before = h.posted.filter((m) => m.type === 'gate_blocked').length;
     fireEvent.click(h.container.querySelector('.ov-retry') as HTMLButtonElement);
     await settle();
@@ -165,11 +168,11 @@ describe('activation readiness UAT', () => {
     const h = mount(F5_TAB);
     await settle(); // boot → bridge active; status never arrives
     expect(txt(h.container)).toContain('getting ready…'); // readying while the bridge is in flight
-    expect(sendDisabled(h.container)).toBe(true);
+    expect(inputLocked(h.container)).toBe(true);
     jest.advanceTimersByTime(10_000); // bridge hard timeout → disconnected
     await settle();
     expect(txt(h.container)).toContain('xcsh not connected — start the CLI'); // overlay stays, actionable
-    expect(sendDisabled(h.container)).toBe(true); // composer stays locked
+    expect(inputLocked(h.container)).toBe(true); // composer stays locked
   });
 
   // Recovery: after the bridge hard-stalls to `disconnected`, a later
@@ -194,7 +197,7 @@ describe('activation readiness UAT', () => {
     h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId });
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…');
-    expect(sendDisabled(h.container)).toBe(false); // recovered all the way to ready
+    expect(inputLocked(h.container)).toBe(false); // recovered all the way to ready
   });
 
   // Inactive path: a tab whose URL does not resolve to an F5 XC tenant never gates.
@@ -204,7 +207,7 @@ describe('activation readiness UAT', () => {
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…');
     expect(txt(h.container)).not.toContain('starting worker…');
-    expect(sendDisabled(h.container)).toBe(false);
+    expect(inputLocked(h.container)).toBe(false);
     expect(placeholder(h.container)).toBe('ask xcsh about this page…');
   });
 
@@ -242,7 +245,7 @@ describe('activation readiness UAT', () => {
     h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId }); // MATCHES
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…'); // matching reqId → page passes
-    expect(sendDisabled(h.container)).toBe(false);
+    expect(inputLocked(h.container)).toBe(false);
   });
 
   // Recovery: a tab's worker dying mid-session (a `bridges` frame that no longer
@@ -261,13 +264,13 @@ describe('activation readiness UAT', () => {
     h.push({ type: 'page_context', snapshot: { title: 'Origin Pools', path: '/pools' }, reqId: runId });
     await settle();
     expect(txt(h.container)).not.toContain('getting ready…'); // reached ready
-    expect(sendDisabled(h.container)).toBe(false);
+    expect(inputLocked(h.container)).toBe(false);
     const blockedBefore = h.posted.filter((m) => m.type === 'gate_blocked').length;
 
     h.push({ type: 'bridges', tenants: [] }); // this tab's worker vanished
     await settle();
     expect(txt(h.container)).toContain('getting ready…'); // overlay is back (re-gated)
-    expect(sendDisabled(h.container)).toBe(true); // input locked again
+    expect(inputLocked(h.container)).toBe(true); // input locked again
     expect(h.posted.filter((m) => m.type === 'gate_blocked').length).toBeGreaterThan(blockedBefore); // reprovision re-driven
   });
 });

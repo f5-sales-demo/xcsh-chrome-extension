@@ -12,7 +12,7 @@
  * without shipping any pixels yet. Each stays inert until its feature flag flips.
  */
 import { isEnabled } from '../ui/flags';
-import { COLORS } from '../ui/theme/tokens';
+import { COLORS } from '../vendor/chat-ui/theme/tokens';
 
 /** Viewport-space rectangle a primitive draws itself at (CSS px). */
 export interface Rect {
