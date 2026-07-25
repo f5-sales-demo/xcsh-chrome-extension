@@ -22,8 +22,17 @@ describe('transcript messages', () => {
   });
 
   it('renders a tool notice with ok/fail glyph', () => {
-    const { getByText } = render(<ToolMessage tool="click" ok={true} text="clicked" />);
-    expect(getByText(/click/).textContent).toContain('✓');
+    // A tool notice WITH detail text is now a collapsible <details>: the label and
+    // status sit in the <summary>, the output in <pre>. (It used to be one flat row,
+    // which is why this assertion reads by class rather than by matched text.)
+    const okRender = render(<ToolMessage tool="click" ok={true} text="clicked" />);
+    expect(okRender.container.querySelector('.tool-activity-status')?.textContent).toBe('✓');
+    expect(okRender.container.querySelector('.tool-activity-detail')?.textContent).toBe('clicked');
+    okRender.unmount();
+
+    // The failure glyph — which this test's name always promised but never checked.
+    const failRender = render(<ToolMessage tool="click" ok={false} text="boom" />);
+    expect(failRender.container.querySelector('.tool-activity-status')?.textContent).toBe('✗');
   });
 
   it('renders an error message with no Retry button by default', () => {

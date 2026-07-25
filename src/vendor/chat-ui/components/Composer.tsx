@@ -24,12 +24,15 @@ import {
 	useState,
 } from "react";
 import { type Attachment, serializeAttachments } from "../attachments/model";
-import type { AttachCategory, InteractionMode, ModelOption } from "../types";
+import type { AttachCategory, InteractionMode, ModelOption, SkillMenuItem, SlashCommand, ToolItem } from "../types";
 import { AttachMenu } from "./AttachMenu";
 import { PlusIcon, SendIcon, StopIcon } from "./icons";
 import { ModelSelector } from "./ModelSelector";
 import { ModeToggle } from "./ModeToggle";
+import { SkillsMenu } from "./SkillsMenu";
+import { SlashCommandMenu } from "./SlashCommandMenu";
 import { StatusBar } from "./StatusBar";
+import { ToolsPickerMenu } from "./ToolsPickerMenu";
 
 /** Imperative handle a host uses to prefill / focus the uncontrolled editor. */
 export interface ComposerHandle {
@@ -68,6 +71,30 @@ export interface ComposerProps {
 	attachCategories?: AttachCategory[];
 	onRequestAttachment?: (categoryId: string) => void;
 	onRemoveAttachment?: (id: string) => void;
+	/**
+	 * Multi-select tools picker (VS Code parity). When `tools` + `onToolsConfirm`
+	 * are provided AND `attachCategories` includes an id `"tools"`, picking that
+	 * category opens a multi-select popup instead of round-tripping via
+	 * `onRequestAttachment`; confirming fires `onToolsConfirm(names)` so the host
+	 * builds the tools attachment and feeds it back through `attachments`.
+	 */
+	tools?: ToolItem[];
+	onToolsConfirm?: (names: string[]) => void;
+	/**
+	 * Skills submenu. When `skills` + `onSkillSelect` are provided AND
+	 * `attachCategories` includes an id `"skills"`, picking that category opens a
+	 * single-select popup of the engine's loaded skills; picking one fires
+	 * `onSkillSelect(name)` (the host prefills `/name`).
+	 */
+	skills?: SkillMenuItem[];
+	onSkillSelect?: (name: string) => void;
+	/** Slash-command menu — a "/" button (rendered only when both are provided). */
+	slashCommands?: SlashCommand[];
+	onSlashSelect?: (command: string) => void;
+	/** Thinking-level control shown inside the mode menu (VS Code parity). */
+	thinkingLevels?: string[];
+	thinkingLevel?: string;
+	onThinkingChange?: (level: string) => void;
 	/** Status bar signals (embedded on the top border). */
 	contextPct?: number | null;
 	sessionLabel?: string;
@@ -115,6 +142,15 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		attachCategories,
 		onRequestAttachment,
 		onRemoveAttachment,
+		tools,
+		onToolsConfirm,
+		skills,
+		onSkillSelect,
+		slashCommands,
+		onSlashSelect,
+		thinkingLevels,
+		thinkingLevel,
+		onThinkingChange,
 		contextPct = null,
 		sessionLabel = "",
 	},
@@ -122,7 +158,29 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 ) {
 	const editorRef = useRef<HTMLDivElement>(null);
 	const [text, setText] = useState("");
+	const [showToolsPicker, setShowToolsPicker] = useState(false);
+	const [showSkillsPicker, setShowSkillsPicker] = useState(false);
 	const hasAttachments = (attachments?.length ?? 0) > 0;
+	const canPickTools = tools != null && onToolsConfirm != null;
+	const canPickSkills = skills != null && onSkillSelect != null;
+
+	// AttachMenu category pick: the "tools" category opens the multi-select picker
+	// and "skills" opens the single-select Skills submenu (when the host provides
+	// them); every other category round-trips to the host.
+	const handleCategory = useCallback(
+		(id: string) => {
+			if (id === "tools" && canPickTools) {
+				setShowToolsPicker(true);
+				return;
+			}
+			if (id === "skills" && canPickSkills) {
+				setShowSkillsPicker(true);
+				return;
+			}
+			onRequestAttachment?.(id);
+		},
+		[canPickTools, canPickSkills, onRequestAttachment],
+	);
 
 	const submit = useCallback(() => {
 		const el = editorRef.current;
@@ -218,14 +276,42 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 				</div>
 			)}
 			<div className="input-footer">
-				{attachCategories && onRequestAttachment ? (
-					<AttachMenu categories={attachCategories} onSelect={onRequestAttachment} disabled={disabled} />
-				) : onAttach ? (
-					<button type="button" className="footer-btn" title="Attach" aria-label="Attach" onClick={onAttach}>
-						<PlusIcon />
-					</button>
-				) : null}
-				{modes && mode != null && onModeChange && <ModeToggle modes={modes} mode={mode} onChange={onModeChange} />}
+				<div className="attach-area" style={{ position: "relative" }}>
+					{showToolsPicker && tools && onToolsConfirm && (
+						<div style={{ position: "absolute", bottom: "100%", left: 0, marginBottom: 4, zIndex: 10 }}>
+							<ToolsPickerMenu
+								tools={tools}
+								onConfirm={onToolsConfirm}
+								onClose={() => setShowToolsPicker(false)}
+							/>
+						</div>
+					)}
+					{showSkillsPicker && skills && onSkillSelect && (
+						<div style={{ position: "absolute", bottom: "100%", left: 0, marginBottom: 4, zIndex: 10 }}>
+							<SkillsMenu skills={skills} onSelect={onSkillSelect} onClose={() => setShowSkillsPicker(false)} />
+						</div>
+					)}
+					{attachCategories ? (
+						<AttachMenu categories={attachCategories} onSelect={handleCategory} disabled={disabled} />
+					) : onAttach ? (
+						<button type="button" className="footer-btn" title="Attach" aria-label="Attach" onClick={onAttach}>
+							<PlusIcon />
+						</button>
+					) : null}
+				</div>
+				{slashCommands && onSlashSelect && (
+					<SlashCommandMenu commands={slashCommands} onSelect={onSlashSelect} disabled={disabled} />
+				)}
+				{modes && mode != null && onModeChange && (
+					<ModeToggle
+						modes={modes}
+						mode={mode}
+						onChange={onModeChange}
+						thinkingLevels={thinkingLevels}
+						thinkingLevel={thinkingLevel}
+						onThinkingChange={onThinkingChange}
+					/>
+				)}
 				<div className="footer-spacer" />
 				{models && model != null && onModelChange && (
 					<ModelSelector models={models} model={model} onSelect={onModelChange} disabled={disabled} />

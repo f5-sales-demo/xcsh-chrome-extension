@@ -25,6 +25,8 @@
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.49",
+    "dompurify": "^3",
+    "marked": "^18",
     "preact": "^10.29.4"
   }
 }
