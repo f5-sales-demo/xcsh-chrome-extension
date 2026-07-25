@@ -1,8 +1,7 @@
-export type FeatureFlag = 'references' | 'overlaysArrow' | 'overlaysUnderline' | 'overlaysScrollTarget';
+export type FeatureFlag = 'overlaysArrow' | 'overlaysUnderline' | 'overlaysScrollTarget';
 
 /** Phase-1 deferred features register but stay dormant here. */
 export const DEFAULT_FLAGS: Record<FeatureFlag, boolean> = {
-  references: false,
   overlaysArrow: false,
   overlaysUnderline: false,
   overlaysScrollTarget: false,
