@@ -127,3 +127,76 @@ describe('MODES', () => {
     expect(MODES.map((m) => m.label)).toEqual(INTERACTION_MODES.map((m) => m.label));
   });
 });
+
+describe('convToMessages · cited sources', () => {
+  /** A conversation with a reference pool plus messages that cite ids from it. */
+  function convWithRefs(
+    references: Array<{ id: string; kind: string; title: string; url: string }>,
+    messages: Record<string, unknown>[],
+  ) {
+    return { ...newConversation('c1', 0), references: references as never, messages: messages as never };
+  }
+
+  it('resolves a message’s ref ids against the pool onto ChatMessage.references', () => {
+    const [m] = convToMessages(
+      convWithRefs(
+        [
+          { id: 'r0', kind: 'doc', title: 'HTTP LB', url: 'https://docs.cloud.f5.com/lb' },
+          { id: 'r1', kind: 'console', title: 'Load Balancers', url: 'https://tenant.console.ves.volterra.io/lb' },
+        ],
+        [{ id: 'a1', role: 'assistant', text: 'see these', at: 0, refs: ['r0', 'r1'] }],
+      ),
+    );
+    expect(m.references).toEqual([
+      { kind: 'doc', title: 'HTTP LB', url: 'https://docs.cloud.f5.com/lb' },
+      { kind: 'console', title: 'Load Balancers', url: 'https://tenant.console.ves.volterra.io/lb' },
+    ]);
+  });
+
+  it('omits references entirely when a message cited nothing', () => {
+    const [m] = convToMessages(convWithRefs([], [{ id: 'a1', role: 'assistant', text: 'no sources', at: 0 }]));
+    expect(m.references).toBeUndefined();
+  });
+
+  it('attributes citations PER MESSAGE (a later answer’s sources stay off an earlier one)', () => {
+    const out = convToMessages(
+      convWithRefs(
+        [
+          { id: 'r0', kind: 'doc', title: 'First', url: 'https://d/1' },
+          { id: 'r1', kind: 'doc', title: 'Second', url: 'https://d/2' },
+        ],
+        [
+          { id: 'a1', role: 'assistant', text: 'one', at: 0, refs: ['r0'] },
+          { id: 'a2', role: 'assistant', text: 'two', at: 1, refs: ['r1'] },
+        ],
+      ),
+    );
+    expect(out[0].references?.map((r) => r.title)).toEqual(['First']);
+    expect(out[1].references?.map((r) => r.title)).toEqual(['Second']);
+  });
+
+  it('skips a ref id missing from the pool instead of crashing', () => {
+    const [m] = convToMessages(
+      convWithRefs(
+        [{ id: 'r0', kind: 'doc', title: 'Kept', url: 'https://d/1' }],
+        [{ id: 'a1', role: 'assistant', text: 'x', at: 0, refs: ['r0', 'r-pruned'] }],
+      ),
+    );
+    expect(m.references).toEqual([{ kind: 'doc', title: 'Kept', url: 'https://d/1' }]);
+  });
+
+  it('keeps the link when the wire kind is unrecognised (the tag is a hint, not the payload)', () => {
+    // chat-schema deliberately types kind as an open string for forward-compat, while
+    // the shared component only tags doc/console. An unknown kind must never cost the
+    // user the citation.
+    const [m] = convToMessages(
+      convWithRefs(
+        [{ id: 'r0', kind: 'blueprint', title: 'Future', url: 'https://d/new' }],
+        [{ id: 'a1', role: 'assistant', text: 'x', at: 0, refs: ['r0'] }],
+      ),
+    );
+    expect(m.references).toHaveLength(1);
+    expect(m.references?.[0].url).toBe('https://d/new');
+    expect(m.references?.[0].kind).toBe('doc');
+  });
+});

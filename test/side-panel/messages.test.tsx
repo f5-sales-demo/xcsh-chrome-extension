@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { fireEvent, render } from '@testing-library/preact';
-import { AssistantMessage, ErrorMessage, ToolMessage, UserMessage } from '../../src/vendor/chat-ui';
+import { newConversation } from '../../src/references-store';
+import { convToMessages } from '../../src/side-panel/adapt';
+import { AssistantMessage, ErrorMessage, ToolMessage, Transcript, UserMessage } from '../../src/vendor/chat-ui';
 
 // These render the VENDORED shared message components under preact/compat — the
 // Phase-5 interop regression proof (the components themselves are unit-tested at
@@ -49,5 +51,51 @@ describe('transcript messages', () => {
     expect(btn.textContent).toBe('Retry');
     fireEvent.click(btn);
     expect(clicked).toBe(1);
+  });
+});
+
+// End-to-end for citations: the store's normalised shape → convToMessages → the
+// vendored Transcript → real DOM. The adapt unit tests prove the mapping is
+// SHAPED right; this proves a cited source actually PAINTS as a usable link.
+describe('cited sources reach the DOM', () => {
+  it('renders a clickable chip for each source the answer cited', () => {
+    const conv = {
+      ...newConversation('c1', 0),
+      references: [
+        { id: 'r0', kind: 'doc', title: 'HTTP LB guide', url: 'https://docs.cloud.f5.com/lb', firstSeenMsg: 'a1' },
+        {
+          id: 'r1',
+          kind: 'console',
+          title: 'Load Balancers',
+          url: 'https://tenant.console.ves.volterra.io/lb',
+          firstSeenMsg: 'a1',
+        },
+      ],
+      messages: [{ id: 'a1', role: 'assistant', text: 'Use an HTTP LB.', at: 0, refs: ['r0', 'r1'] }],
+    } as never;
+
+    const { container } = render(<Transcript messages={convToMessages(conv)} streaming={false} />);
+
+    const links = Array.from(container.querySelectorAll('a')).map((a) => ({
+      href: a.getAttribute('href'),
+      rel: a.getAttribute('rel'),
+      text: a.textContent,
+    }));
+    expect(links.map((l) => l.href)).toEqual([
+      'https://docs.cloud.f5.com/lb',
+      'https://tenant.console.ves.volterra.io/lb',
+    ]);
+    expect(links[0].text).toContain('HTTP LB guide');
+    // Opened from a side panel, so each must be a safe external link.
+    expect(links.every((l) => (l.rel ?? '').includes('noopener'))).toBe(true);
+  });
+
+  it('an answer that cited nothing renders no chip row', () => {
+    const conv = {
+      ...newConversation('c1', 0),
+      messages: [{ id: 'a1', role: 'assistant', text: 'No sources needed.', at: 0 }],
+    } as never;
+    const { container } = render(<Transcript messages={convToMessages(conv)} streaming={false} />);
+    expect(container.querySelectorAll('a')).toHaveLength(0);
   });
 });

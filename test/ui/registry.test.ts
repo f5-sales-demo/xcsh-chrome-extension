@@ -13,9 +13,9 @@ describe('widget registry', () => {
   });
 
   it('hides flag-gated widgets unless the flag is on', () => {
-    registerWidget({ id: 'refs', slot: 'drawer', flag: 'references', component: Noop });
+    registerWidget({ id: 'refs', slot: 'drawer', flag: 'overlaysArrow', component: Noop });
     expect(widgetsForSlot('drawer')).toHaveLength(0);
-    expect(widgetsForSlot('drawer', { references: true })).toHaveLength(1);
+    expect(widgetsForSlot('drawer', { overlaysArrow: true })).toHaveLength(1);
   });
 
   it('honors a when() predicate', () => {
