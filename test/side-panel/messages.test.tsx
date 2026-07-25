@@ -63,7 +63,13 @@ describe('cited sources reach the DOM', () => {
       ...newConversation('c1', 0),
       references: [
         { id: 'r0', kind: 'doc', title: 'HTTP LB guide', url: 'https://docs.cloud.f5.com/lb', firstSeenMsg: 'a1' },
-        { id: 'r1', kind: 'console', title: 'Load Balancers', url: 'https://tenant.console.ves.volterra.io/lb', firstSeenMsg: 'a1' },
+        {
+          id: 'r1',
+          kind: 'console',
+          title: 'Load Balancers',
+          url: 'https://tenant.console.ves.volterra.io/lb',
+          firstSeenMsg: 'a1',
+        },
       ],
       messages: [{ id: 'a1', role: 'assistant', text: 'Use an HTTP LB.', at: 0, refs: ['r0', 'r1'] }],
     } as never;
