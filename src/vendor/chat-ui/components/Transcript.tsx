@@ -14,14 +14,39 @@ const AT_BOTTOM_SLOP = 50;
 export interface TranscriptProps {
 	messages: ChatMessage[];
 	streaming: boolean;
+	/**
+	 * Suffix for the pre-first-token "Thinking…" row, so a turn that will take
+	 * noticeably longer says why (e.g. "with web search" — a server-side search adds
+	 * several seconds before any token, which otherwise reads as a hang).
+	 */
+	thinkingLabel?: string;
 	onRetry?: (text: string) => void;
+	/**
+	 * Rendered as the FIRST child INSIDE the scrollport, in both the empty and the
+	 * populated state — so a host brand block (logo + wordmark) is visible on open
+	 * and then scrolls away with the conversation (Claude-for-Office behaviour).
+	 *
+	 * It must live inside `.messages` rather than in {@link emptyState}: the empty
+	 * state unmounts on the first send, so brand-via-emptyState would VANISH
+	 * instead of scrolling. Static content, so being inside the `aria-live` log is
+	 * harmless (initial content is not announced and it never mutates).
+	 */
+	brand?: ReactNode;
 	/** Rendered in place of the rows when there are no messages. */
 	emptyState?: ReactNode;
 	/** Accessible label for the transcript live region (default "Conversation"). */
 	label?: string;
 }
 
-export function Transcript({ messages, streaming, onRetry, emptyState, label = "Conversation" }: TranscriptProps) {
+export function Transcript({
+	messages,
+	streaming,
+	thinkingLabel,
+	onRetry,
+	brand,
+	emptyState,
+	label = "Conversation",
+}: TranscriptProps) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const userAtBottom = useRef(true);
 	const [showFab, setShowFab] = useState(false);
@@ -46,14 +71,17 @@ export function Transcript({ messages, streaming, onRetry, emptyState, label = "
 		setShowFab(false);
 	}, []);
 
-	// After each render, follow the tail only if the user was already at the bottom.
-	useLayoutEffect(() => {
-		const el = scrollRef.current;
-		if (el && userAtBottom.current) el.scrollTop = el.scrollHeight;
-	});
-
 	const lastId = messages.length > 0 ? messages[messages.length - 1].id : null;
 	const empty = messages.length === 0;
+
+	// After each render, follow the tail only if the user was already at the bottom.
+	// NOT while empty: `userAtBottom` starts true and this effect has no dep array, so
+	// an empty transcript would be pinned to the bottom on first paint — scrolling the
+	// `brand` block out of view before the user ever sees it.
+	useLayoutEffect(() => {
+		const el = scrollRef.current;
+		if (el && userAtBottom.current && !empty) el.scrollTop = el.scrollHeight;
+	});
 
 	return (
 		<>
@@ -65,7 +93,10 @@ export function Transcript({ messages, streaming, onRetry, emptyState, label = "
 				aria-live="polite"
 				aria-label={label}
 			>
-				{empty && emptyState ? emptyState : messages.map(m => renderMessage(m, lastId, streaming, onRetry))}
+				{brand}
+				{empty && emptyState
+					? emptyState
+					: messages.map(m => renderMessage(m, lastId, streaming, onRetry, thinkingLabel))}
 			</div>
 			{showFab && (
 				<button
@@ -87,9 +118,11 @@ function renderMessage(
 	lastId: string | null,
 	streaming: boolean,
 	onRetry?: (text: string) => void,
+	thinkingLabel?: string,
 ): ReactNode {
 	if (m.role === "user") return <UserMessage key={m.id} text={m.text} />;
-	if (m.role === "tool") return <ToolMessage key={m.id} tool={m.tool ?? "tool"} ok={m.ok ?? true} text={m.text} />;
+	if (m.role === "tool")
+		return <ToolMessage key={m.id} tool={m.tool ?? "tool"} ok={m.ok ?? true} text={m.text} running={m.running} />;
 	if (m.error) {
 		const canRetry = !!m.retryText && m.id === lastId && !!onRetry;
 		return (
@@ -100,6 +133,9 @@ function renderMessage(
 			/>
 		);
 	}
-	if (!m.text && streaming) return <ThinkingIndicator key={m.id} />;
-	return <AssistantMessage key={m.id} text={m.text} />;
+	if (!m.text && streaming) return <ThinkingIndicator key={m.id} label={thinkingLabel} />;
+	// The caret marks the live turn — only the last row while the session streams.
+	return (
+		<AssistantMessage key={m.id} text={m.text} references={m.references} streaming={streaming && m.id === lastId} />
+	);
 }

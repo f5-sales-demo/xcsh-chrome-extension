@@ -25,10 +25,21 @@ export interface ChatMessage {
 	/** tool rows only: the tool name and whether it succeeded. */
 	tool?: string;
 	ok?: boolean;
+	/** tool rows only: the call is still in flight (renders a live spinner). */
+	running?: boolean;
 	/** Render this row as an error (system gutter, alert-red body). */
 	error?: boolean;
 	/** When set on the last message, the Transcript offers a Retry button. */
 	retryText?: string;
+	/** assistant rows only: cited sources, rendered as a "Sources" chip row. */
+	references?: ChatReference[];
+}
+
+/** A source the assistant cited — an F5 docs page or a tenant-console deep link. */
+export interface ChatReference {
+	kind: "doc" | "console";
+	title: string;
+	url: string;
 }
 
 /** A conversation-mode option (the mode LIST is a host-provided prop). */
@@ -66,6 +77,45 @@ export interface SkillPill {
 export interface AttachCategory {
 	id: string;
 	label: string;
+	description?: string;
+	/**
+	 * Render this category as an on/off TOGGLE (a checkmark shows when `active`).
+	 * Picking a toggle fires `onSelect(id)` but does NOT close the menu, so the flip
+	 * is visible — used for the "Search the web" toggle.
+	 */
+	toggle?: boolean;
+	active?: boolean;
+}
+
+/**
+ * A slash command shown in the composer's `/` menu. The host owns the command
+ * space; the shared UI renders `label`/`description` and reports the picked
+ * `command` string (e.g. "/status"), which the host submits as the prompt.
+ */
+export interface SlashCommand {
+	command: string;
+	label: string;
+	description?: string;
+}
+
+/**
+ * A selectable host tool for the composer's multi-select tools picker (opened by
+ * the `tools` attach category). The host feeds the list; the shared UI reports
+ * the chosen tool `name`s so the host can build a tools attachment.
+ */
+export interface ToolItem {
+	name: string;
+	label: string;
+	description?: string;
+}
+
+/**
+ * A skill shown in the composer's Skills submenu (opened by the `skills` attach
+ * category). The host feeds the list (from the engine's loaded skills); picking
+ * one reports its `name` so the host can invoke it (e.g. prefill `/name`).
+ */
+export interface SkillMenuItem {
+	name: string;
 	description?: string;
 }
 
