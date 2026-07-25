@@ -10,16 +10,42 @@
  */
 import { INTERACTION_MODES } from '../chat-protocol';
 import type { Conversation } from '../references-store';
-import type { ActivationGate, ChatMessage, InteractionMode } from '../vendor/chat-ui';
+import type { ActivationGate, ChatMessage, ChatReference, InteractionMode } from '../vendor/chat-ui';
 import { type ActivationState, GATES, type GateName, type GateStatus } from './activation';
 import { abortInfo } from './state';
+
+/**
+ * The sources ONE message cited, resolved from the conversation's deduped pool.
+ *
+ * The store keeps citations normalised — `conv.references` is the URL-deduped pool
+ * and each message records only the ids it cited — so chips land under the answer
+ * that actually cited them rather than being smeared across the transcript.
+ *
+ * Two deliberate leniencies, because a citation is worth more than its label:
+ *  - an id with no pool entry (e.g. pruned history) is skipped, not fatal;
+ *  - `chat_done.references[].kind` is an OPEN string on the wire (forward-compat),
+ *    while the shared chip only tags `doc`/`console`. An unrecognised kind falls
+ *    back to `doc` so the link still renders — the tag is a hint, the URL is the
+ *    payload. Dropping the chip would silently lose a source.
+ */
+function citedSources(conv: Conversation, refIds: string[] | undefined): ChatReference[] | undefined {
+  if (!refIds || refIds.length === 0) return undefined;
+  const byId = new Map(conv.references.map((r) => [r.id, r]));
+  const out = refIds.flatMap((id): ChatReference[] => {
+    const ref = byId.get(id);
+    if (!ref) return [];
+    return [{ kind: ref.kind === 'console' ? 'console' : 'doc', title: ref.title, url: ref.url }];
+  });
+  return out.length > 0 ? out : undefined;
+}
 
 /**
  * Conversation rows → shared `ChatMessage[]`. Aborted turns fold to error rows
  * using the per-reason copy (or the raw provider text for a 4xx), and carry
  * `retryText` ONLY when the reason is retryable and the prompt was captured — the
  * shared Transcript then offers Retry on the LAST such row (matching the old
- * local Transcript's `id === lastId` gate).
+ * local Transcript's `id === lastId` gate). A settled answer also carries the
+ * sources it cited, which the shared AssistantMessage renders as a chip row.
  */
 export function convToMessages(conv: Conversation): ChatMessage[] {
   return conv.messages.map((m): ChatMessage => {
@@ -32,7 +58,8 @@ export function convToMessages(conv: Conversation): ChatMessage[] {
       const retryText = info.retryable && m.retryPrompt ? m.retryPrompt : undefined;
       return { id: m.id, role: m.role, text, error: true, ...(retryText ? { retryText } : {}) };
     }
-    return { id: m.id, role: m.role, text: m.text };
+    const references = citedSources(conv, m.refs);
+    return { id: m.id, role: m.role, text: m.text, ...(references ? { references } : {}) };
   });
 }
 
