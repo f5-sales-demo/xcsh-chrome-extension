@@ -32,6 +32,7 @@ import {
 } from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
+import { SkillsWaiters } from './skills-waiters';
 import {
   planChatRequest,
   planHelloAck,
@@ -387,15 +388,10 @@ const turnRoutedAt = new Map<string, number>();
 
 // Connected chat side-panel Ports (for broadcasting tab/connection state).
 const chatPanels = new Set<chrome.runtime.Port>();
-/**
- * Panels awaiting a `skills` reply, keyed by the BRIDGE SOCKET their request went
- * out on. The reply carries no turn id, so it can't be routed through turnToPort —
- * but skills belong to the worker behind a socket, not to a tab, so socket-keyed
- * delivery is both correct and safe: two tabs sharing a worker legitimately share
- * its skills, while a panel on a DIFFERENT worker never sees them. Fanning to all
- * of `chatPanels` would be exactly the cross-tab leak #33/#166 guard against.
- */
-const skillsWaiters = new Map<number, Set<chrome.runtime.Port>>();
+/** Panels awaiting a `skills` reply, keyed by the bridge socket the request went out
+ *  on. Bookkeeping (and the why) lives in the tested `skills-waiters` module — a
+ *  waiter must not outlive its socket, since bridge ports are a reusable pool. */
+const skillsWaiters = new SkillsWaiters<chrome.runtime.Port>();
 // Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
 // busy" signal that locks the controlled tab against passive rebinding.
 let inFlightCount = 0;
@@ -626,6 +622,7 @@ function scanRange(): void {
     }
     sockets.delete(port);
     registry.delete(port);
+    skillsWaiters.forgetPort(port); // stale-pruned socket — same reuse hazard (#340)
   }
   for (const port of portCandidates()) {
     const s = sockets.get(port);
@@ -698,6 +695,9 @@ function connectPort(port: number): void {
       if (sockets.get(port) === sock) sockets.delete(port);
       registry.delete(port);
       portToTab.delete(port); // this worker's tab binding dies with its socket
+      // Ports are a reusable pool: a waiter left here would be handed the NEXT
+      // worker's skills reply, possibly under a different tenant (#340).
+      skillsWaiters.forgetPort(port);
       // Only log a real bridge that dropped — NOT dead-port scan refusals (never
       // opened). The 30s full-range scan probes ~14 empty ports every cycle; logging
       // each close saturated the diag ring buffer and evicted the useful events (#182).
@@ -825,10 +825,7 @@ function onMessage(msg: any, sourcePort: number): void {
 
     onSkills: (frame) => {
       // Deliver to the panels that asked on THIS socket, then forget them.
-      const waiting = skillsWaiters.get(sourcePort);
-      if (!waiting) return;
-      skillsWaiters.delete(sourcePort);
-      for (const p of waiting) {
+      for (const p of skillsWaiters.take(sourcePort)) {
         try {
           p.postMessage(frame);
         } catch {
@@ -1018,9 +1015,7 @@ chrome.runtime.onConnect.addListener((port) => {
       const plan = planSkillsRequest(m, registry, (p) => sockets.get(p)?.readyState === WebSocket.OPEN);
       if (plan.kind === 'skip') return;
       if (!sendTo(plan.port, { type: 'list_skills' })) return;
-      const waiting = skillsWaiters.get(plan.port) ?? new Set<chrome.runtime.Port>();
-      waiting.add(port);
-      skillsWaiters.set(plan.port, waiting);
+      skillsWaiters.add(plan.port, port);
       return;
     }
     if (m.type === 'chat_request') {
@@ -1156,10 +1151,7 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   port.onDisconnect.addListener(() => {
     chatPanels.delete(port);
-    // Never hold a closed port in a waiter set (the reply may arrive later).
-    for (const [bridgePort, waiting] of skillsWaiters) {
-      if (waiting.delete(port) && waiting.size === 0) skillsWaiters.delete(bridgePort);
-    }
+    skillsWaiters.forgetPanel(port); // the reply may still arrive; deliver to nobody
     for (const [id, p] of turnToPort)
       if (p === port) {
         turnToPort.delete(id);
