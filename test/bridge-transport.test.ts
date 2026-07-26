@@ -144,3 +144,25 @@ describe('bridge transport over a real WebSocket', () => {
     expect(identity).toMatchObject({ sessionId: 'tab-7', tenant: 'example-id-008', env: 'staging' });
   });
 });
+
+describe('dispatchBridgeFrame · skills', () => {
+  it('routes a skills reply to onSkills, not onChatInbound', () => {
+    const seen: string[] = [];
+    dispatchBridgeFrame(
+      { type: 'skills', skills: [{ name: 'competitive', description: 'battlecards' }] },
+      {
+        onSkills: (f) => seen.push(`skills:${f.skills.map((s) => s.name).join(',')}`),
+        onChatInbound: () => seen.push('chatInbound'),
+      },
+    );
+    // Must NOT fall through to the turn-id-routed path — that lookup would be
+    // turnToPort.get(undefined) and the reply would vanish.
+    expect(seen).toEqual(['skills:competitive']);
+  });
+
+  it('a malformed skills frame is ignored rather than delivered', () => {
+    let called = 0;
+    dispatchBridgeFrame({ type: 'skills' }, { onSkills: () => (called += 1) });
+    expect(called).toBe(0);
+  });
+});

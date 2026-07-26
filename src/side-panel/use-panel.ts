@@ -7,7 +7,7 @@
  * snapshot to the activation run that requested it. The panel presents as ready
  * only when bridge + worker + page have all passed (App reads the derived phase).
  */
-import { useEffect, useMemo, useReducer, useRef } from 'preact/hooks';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type { LiveTenant } from '../bridge-discovery';
 import {
   buildChatRequest,
@@ -17,6 +17,8 @@ import {
   type ChatStreamMsg,
   type InteractionMode,
   isChatInbound,
+  isSkillsList,
+  type SkillInfo,
 } from '../chat-protocol';
 import {
   appendToolNotice,
@@ -65,6 +67,11 @@ export function usePanel() {
   const latestContext = useRef<unknown>(null);
   const liveTenants = useRef<LiveTenant[]>([]);
   const connectedRef = useRef(false);
+  // The engine's loaded skills, for the composer's Skills submenu. Requested once the
+  // worker is ready and replaced wholesale by each `skills` reply; empty until then,
+  // so the menu is simply absent rather than showing a stale or half list.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const skillsRequestedForRun = useRef(-1);
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
   const turnTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,6 +199,14 @@ export function usePanel() {
       }
       gateTimers.current.page = setTimeout(() => fireActivation({ kind: 'timeout', gate: 'page' }), PAGE_TIMEOUT_MS);
     }
+    // Worker ready → enumerate its skills, once per activation run (runId keying, the
+    // same idiom as pageRequestedForRun — afterActivation sees only `next`, and a
+    // re-provisioned worker gets a new runId so a fresh session re-asks). Best-effort:
+    // the SW silently skips a tab with no worker and the menu simply stays absent.
+    if (next.phase === 'ready' && skillsRequestedForRun.current !== next.runId) {
+      skillsRequestedForRun.current = next.runId;
+      bus.post({ type: 'list_skills', tabId: boundTabId.current, sessionKey: boundSessionKey.current ?? undefined });
+    }
     // Auto-resend-once: the worker was re-provisioned after a recoverable failure and
     // is ready again — replay the stashed prompt exactly once, through the normal send
     // path (which no-ops if a turn is already active, so a double-send is impossible).
@@ -317,6 +332,10 @@ export function usePanel() {
         if (incomingTabId === boundTabId.current && !(msg as { chipOnly?: boolean }).chipOnly) {
           bus.post({ type: 'get_page_context', tabId: incomingTabId });
         }
+        return;
+      }
+      if (isSkillsList(msg)) {
+        setSkills(msg.skills);
         return;
       }
       if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') return;
@@ -536,5 +555,6 @@ export function usePanel() {
     refreshContext,
     toggleContext,
     retry,
+    skills,
   };
 }

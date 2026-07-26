@@ -13,6 +13,7 @@ import {
   planHelloAck,
   planReprovision,
   planReTenant,
+  planSkillsRequest,
   planToolRequest,
 } from '../src/sw-router';
 
@@ -171,5 +172,30 @@ describe('planReTenant (RC-1 source-side eviction)', () => {
       evictPorts: [19222],
       provisionTenant: null,
     });
+  });
+});
+
+describe('planSkillsRequest (session-level, so no turn id to carry)', () => {
+  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging' }]]);
+
+  test('routes to the tab’s own worker under the SAME tenant rules as a turn', () => {
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-id-008|staging' }, reg, allOpen)).toEqual({
+      kind: 'route',
+      port: 19222,
+    });
+  });
+
+  test('refuses a stale-tenant worker (RC-1 applies here too — never a global fallback)', () => {
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-id-003' }, reg, allOpen)).toEqual({ kind: 'skip' });
+  });
+
+  test('a tab with no bound worker is a silent skip, not an error frame', () => {
+    // Enumeration is best-effort: the composer simply shows no Skills category, the
+    // same as the Office pane when no reply arrives. There is no turn to fail.
+    expect(planSkillsRequest({ tabId: 99 }, reg, allOpen)).toEqual({ kind: 'skip' });
+  });
+
+  test('skips when the socket is closed', () => {
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-id-008|staging' }, reg, () => false)).toEqual({ kind: 'skip' });
   });
 });

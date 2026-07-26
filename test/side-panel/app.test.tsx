@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { cleanup, render } from '@testing-library/preact';
+import { act, cleanup, render } from '@testing-library/preact';
 import { App } from '../../src/side-panel/App';
 
 // Minimal `chrome` stub for the mount smoke test. usePanel calls
@@ -11,11 +11,21 @@ import { App } from '../../src/side-panel/App';
 // stub and crash this render (observed as a CI-only failure). Scoping per-test
 // makes the suite order-independent.
 const listener = { addListener: () => {}, removeListener: () => {} };
+/** Frames the panel posted to the SW, and a hook to push SW→panel frames back. */
+const bus: { posted: Record<string, unknown>[]; push: (m: unknown) => void } = {
+  posted: [],
+  push: () => {},
+};
 const chromeStub = {
   runtime: {
     connect: () => ({
-      onMessage: { addListener: () => {}, removeListener: () => {} },
-      postMessage: () => {},
+      onMessage: {
+        addListener: (cb: (m: unknown) => void) => {
+          bus.push = cb;
+        },
+        removeListener: () => {},
+      },
+      postMessage: (m: Record<string, unknown>) => bus.posted.push(m),
     }),
   },
   tabs: {
@@ -28,6 +38,8 @@ const chromeStub = {
 
 let prevChrome: unknown;
 beforeEach(() => {
+  bus.posted = [];
+  bus.push = () => {};
   prevChrome = (globalThis as { chrome?: unknown }).chrome;
   (globalThis as { chrome?: unknown }).chrome = chromeStub;
 });
@@ -48,5 +60,52 @@ describe('side-panel App shell', () => {
     // the prompt on `data-placeholder` (not a textarea `placeholder`).
     const input = container.querySelector<HTMLElement>('[role="textbox"][aria-label="Message input"]');
     expect(input?.getAttribute('data-placeholder')).toMatch(/ask xcsh/i);
+  });
+});
+
+describe('side-panel skills menu', () => {
+  it('shows no + button until the engine reports skills', () => {
+    const { container } = render(<App />);
+    expect(container.querySelector('[aria-label="Add context"]')).toBeNull();
+  });
+
+  it('renders reported skills in the + submenu and prefills /name without sending', async () => {
+    const { container } = render(<App />);
+
+    // The SW delivers the engine's id-less `skills` reply to this panel.
+    await act(async () => {
+      bus.push({
+        type: 'skills',
+        skills: [
+          { name: 'competitive', description: 'F5 XC battlecards' },
+          { name: 'roi-calculator', description: 'ROI / TCO' },
+        ],
+      });
+    });
+
+    const plus = container.querySelector<HTMLElement>('[aria-label="Add context"]');
+    expect(plus).toBeTruthy();
+    await act(async () => {
+      plus?.click();
+    });
+    const skillsItem = Array.from(container.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((el) =>
+      /^Skills/.test(el.textContent ?? ''),
+    );
+    expect(skillsItem).toBeTruthy();
+    await act(async () => {
+      skillsItem?.click();
+    });
+    const pick = Array.from(container.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((el) =>
+      /competitive/.test(el.textContent ?? ''),
+    );
+    expect(pick).toBeTruthy();
+    await act(async () => {
+      pick?.click();
+    });
+
+    // Prefilled for the user to add input — never auto-sent.
+    const editor = container.querySelector<HTMLElement>('[role="textbox"][aria-label="Message input"]');
+    expect(editor?.textContent).toBe('/competitive ');
+    expect(bus.posted.filter((m) => m.type === 'chat_request')).toHaveLength(0);
   });
 });

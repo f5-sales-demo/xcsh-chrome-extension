@@ -107,6 +107,27 @@ export interface ChatKeepaliveMsg {
   id: string;
 }
 
+/** One skill the engine has loaded, as the composer's Skills submenu shows it.
+ *  Enumeration only — invoking a skill is just a prompt beginning `/name`. */
+export interface SkillInfo {
+  name: string;
+  description: string;
+}
+
+/** Panel -> xcsh: enumerate the session's loaded skills. Session-level, so it
+ *  carries no turn id. */
+export interface ListSkillsMsg {
+  type: 'list_skills';
+}
+
+/** xcsh -> panel: the reply. Deliberately NOT part of {@link ChatInbound}: that
+ *  union is the set the SW routes by `frame.id`, and this frame has none — the SW
+ *  routes it by the socket it arrived on instead. */
+export interface SkillsListMsg {
+  type: 'skills';
+  skills: SkillInfo[];
+}
+
 // --- Host-tool channel (contract 1.8.0) --------------------------------------
 // Lets the agent invoke tools that must run inside the host UI (an Office task
 // pane: read/write ranges, insert slides, draft mail) over the WS bridge — the
@@ -223,6 +244,12 @@ export function reduceChatTurn(state: ChatTurnState, msg: ChatStreamMsg): ChatTu
     return { ...state, status: 'done', references: msg.references ?? [] };
   }
   return { ...state, status: 'error', error: msg.error };
+}
+
+export function isSkillsList(msg: unknown): msg is SkillsListMsg {
+  if (!msg || typeof msg !== 'object') return false;
+  const m = msg as { type?: unknown; skills?: unknown };
+  return m.type === 'skills' && Array.isArray(m.skills);
 }
 
 export function isChatInbound(msg: unknown): msg is ChatInbound {
