@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from 'preact/hooks';
 import type { InteractionMode } from '../chat-protocol';
-import type { AttachCategory, ComposerHandle } from '../vendor/chat-ui';
+import type { AttachCategory, ComposerHandle, SlashCommand } from '../vendor/chat-ui';
 import { ActivationOverlay, Composer, ContextChip, Transcript } from '../vendor/chat-ui';
 import { activationToGates, convToMessages, MODES, overlayBlocked } from './adapt';
 import { inputLocked, overlayVisible } from './state';
@@ -20,6 +20,18 @@ const SKILLS_CATEGORY: AttachCategory = {
   label: 'Skills',
   description: 'Run a workspace skill',
 };
+
+/**
+ * Curated slash commands, matching the VS Code webview's list rather than inventing a
+ * third convention. These are ordinary prompts the agent understands — not
+ * engine-enumerated commands — so there is nothing to fetch. All three are as
+ * meaningful here as in the editor: the panel already shows tenant context in its chip.
+ */
+const SLASH_COMMANDS: SlashCommand[] = [
+  { command: '/status', label: 'Status', description: 'Show integration health' },
+  { command: '/context', label: 'Context', description: 'Show active xcsh context' },
+  { command: '/resources', label: 'Resources', description: 'Browse current namespace' },
+];
 
 export function App() {
   const p = usePanel();
@@ -56,6 +68,10 @@ export function App() {
         attachCategories={attachCategories}
         skills={p.skills}
         onSkillSelect={onSkillSelect}
+        slashCommands={SLASH_COMMANDS}
+        // SENDS rather than prefills: a slash command is complete as written, unlike a
+        // skill (`/name ` + arguments). Same behaviour as the VS Code webview.
+        onSlashSelect={p.sendMessage}
       />
       {overlayVisible(s) ? (
         <ActivationOverlay
