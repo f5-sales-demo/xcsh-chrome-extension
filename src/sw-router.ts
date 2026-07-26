@@ -44,6 +44,38 @@ export function planChatRequest(
   return { kind: 'route', id: msg.id, port: target };
 }
 
+/** A `list_skills` request from the panel. Session-level, so unlike a chat turn
+ *  there is no id to correlate or to fail against. */
+export interface SkillsRequestLike {
+  tabId?: unknown;
+  sessionKey?: unknown;
+}
+
+export type SkillsRoutePlan = { kind: 'route'; port: number } | { kind: 'skip' };
+
+/**
+ * Decide where a panel's `list_skills` goes — the same per-tab, tenant-matched
+ * worker a chat turn would use, so enumeration can never read a different tab's
+ * (or a stale tenant's) session.
+ *
+ * Unroutable is a SKIP, not an error: skills are best-effort enumeration, the
+ * composer simply shows no Skills category (matching the Office pane when no reply
+ * arrives), and with no turn id there is nothing to report a failure against.
+ */
+export function planSkillsRequest(
+  msg: SkillsRequestLike,
+  registry: Map<number, BridgeLike>,
+  isOpen: (port: number) => boolean,
+): SkillsRoutePlan {
+  const target = resolveChatPort(
+    typeof msg.tabId === 'number' ? msg.tabId : undefined,
+    registry,
+    typeof msg.sessionKey === 'string' ? msg.sessionKey : undefined,
+  );
+  if (target === undefined || !isOpen(target)) return { kind: 'skip' };
+  return { kind: 'route', port: target };
+}
+
 export type ProbeOutcome = 'answered' | 'alive' | 'dead';
 
 /** Decide a route-ack watchdog's outcome for an unanswered turn. The SW arms this

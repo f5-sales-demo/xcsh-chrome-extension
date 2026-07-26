@@ -5,6 +5,7 @@ import {
   type ChatStreamMsg,
   initChatTurn,
   isChatInbound,
+  isSkillsList,
   reduceChatTurn,
 } from '../src/chat-protocol';
 
@@ -112,5 +113,22 @@ describe('isChatInbound', () => {
     expect(isChatInbound({ type: 'chat_keepalive', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'tool_result', id: '1' })).toBe(false);
     expect(isChatInbound(null)).toBe(false);
+  });
+});
+
+describe('list_skills / skills frames', () => {
+  it('isSkillsList accepts a well-formed reply and rejects near-misses', () => {
+    expect(isSkillsList({ type: 'skills', skills: [{ name: 'competitive', description: 'battlecards' }] })).toBe(true);
+    expect(isSkillsList({ type: 'skills', skills: [] })).toBe(true);
+    expect(isSkillsList({ type: 'skills' })).toBe(false);
+    expect(isSkillsList({ type: 'skills', skills: 'nope' })).toBe(false);
+    expect(isSkillsList({ type: 'chat_done', id: 'c-1' })).toBe(false);
+    expect(isSkillsList(null)).toBe(false);
+  });
+
+  it('a skills reply is NOT chat-inbound (it carries no turn id to route by)', () => {
+    // isChatInbound gates the frames the SW routes via turnToPort.get(frame.id).
+    // `skills` is session-level, so widening that guard would route it to undefined.
+    expect(isChatInbound({ type: 'skills', skills: [] })).toBe(false);
   });
 });

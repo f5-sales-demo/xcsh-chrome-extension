@@ -32,7 +32,14 @@ import {
 } from './diagnostics';
 import { runDispatch } from './dispatch';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
-import { planChatRequest, planHelloAck, planReprovision, planReTenant, planToolRequest } from './sw-router';
+import {
+  planChatRequest,
+  planHelloAck,
+  planReprovision,
+  planReTenant,
+  planSkillsRequest,
+  planToolRequest,
+} from './sw-router';
 import {
   type BindingState,
   decideBinding,
@@ -380,6 +387,15 @@ const turnRoutedAt = new Map<string, number>();
 
 // Connected chat side-panel Ports (for broadcasting tab/connection state).
 const chatPanels = new Set<chrome.runtime.Port>();
+/**
+ * Panels awaiting a `skills` reply, keyed by the BRIDGE SOCKET their request went
+ * out on. The reply carries no turn id, so it can't be routed through turnToPort —
+ * but skills belong to the worker behind a socket, not to a tab, so socket-keyed
+ * delivery is both correct and safe: two tabs sharing a worker legitimately share
+ * its skills, while a panel on a DIFFERENT worker never sees them. Fanning to all
+ * of `chatPanels` would be exactly the cross-tab leak #33/#166 guard against.
+ */
+const skillsWaiters = new Map<number, Set<chrome.runtime.Port>>();
 // Count of in-flight tool dispatches; with turnToPort.size it forms the "xcsh is
 // busy" signal that locks the controlled tab against passive rebinding.
 let inFlightCount = 0;
@@ -807,6 +823,20 @@ function onMessage(msg: any, sourcePort: number): void {
         .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
     },
 
+    onSkills: (frame) => {
+      // Deliver to the panels that asked on THIS socket, then forget them.
+      const waiting = skillsWaiters.get(sourcePort);
+      if (!waiting) return;
+      skillsWaiters.delete(sourcePort);
+      for (const p of waiting) {
+        try {
+          p.postMessage(frame);
+        } catch {
+          // Panel closed between asking and answering — nothing to deliver to.
+        }
+      }
+    },
+
     onChatInbound: (frame) => {
       const port = turnToPort.get(frame.id);
       port?.postMessage(frame);
@@ -981,6 +1011,18 @@ chrome.runtime.onConnect.addListener((port) => {
   chatPanels.add(port);
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
+    if (m.type === 'list_skills') {
+      // Same tab/tenant resolution as a turn (planSkillsRequest wraps resolveChatPort),
+      // so enumeration can never read another tab's or a stale tenant's session.
+      // Unroutable is a silent skip: the composer just shows no Skills category.
+      const plan = planSkillsRequest(m, registry, (p) => sockets.get(p)?.readyState === WebSocket.OPEN);
+      if (plan.kind === 'skip') return;
+      if (!sendTo(plan.port, { type: 'list_skills' })) return;
+      const waiting = skillsWaiters.get(plan.port) ?? new Set<chrome.runtime.Port>();
+      waiting.add(port);
+      skillsWaiters.set(plan.port, waiting);
+      return;
+    }
     if (m.type === 'chat_request') {
       // Route to the worker for the PANEL'S OWN tab (m.tabId), never a global
       // activePort — otherwise a turn from one tab lands on another tab's worker
@@ -1114,6 +1156,10 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   port.onDisconnect.addListener(() => {
     chatPanels.delete(port);
+    // Never hold a closed port in a waiter set (the reply may arrive later).
+    for (const [bridgePort, waiting] of skillsWaiters) {
+      if (waiting.delete(port) && waiting.size === 0) skillsWaiters.delete(bridgePort);
+    }
     for (const [id, p] of turnToPort)
       if (p === port) {
         turnToPort.delete(id);
