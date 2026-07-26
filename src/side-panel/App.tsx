@@ -1,4 +1,6 @@
+import { useCallback, useMemo, useRef } from 'preact/hooks';
 import type { InteractionMode } from '../chat-protocol';
+import type { AttachCategory, ComposerHandle } from '../vendor/chat-ui';
 import { ActivationOverlay, Composer, ContextChip, Transcript } from '../vendor/chat-ui';
 import { activationToGates, convToMessages, MODES, overlayBlocked } from './adapt';
 import { inputLocked, overlayVisible } from './state';
@@ -10,10 +12,24 @@ import { usePanel } from './use-panel';
  * view-model (Conversation / ActivationState / modes) is mapped into their
  * headless props by `./adapt`; all behavior still lives in `usePanel`.
  */
+/** The one "+" category this surface offers: the engine's skills. Chrome has no
+ *  attachment picker (no photos/files like the Office pane), so the menu exists only
+ *  when there is at least one skill to put in it — never an empty affordance. */
+const SKILLS_CATEGORY: AttachCategory = {
+  id: 'skills',
+  label: 'Skills',
+  description: 'Run a workspace skill',
+};
+
 export function App() {
   const p = usePanel();
   const s = p.state;
   const streaming = s.active !== null;
+  const composerRef = useRef<ComposerHandle>(null);
+  const attachCategories = useMemo(() => (p.skills.length > 0 ? [SKILLS_CATEGORY] : undefined), [p.skills.length]);
+  // Prefill `/name ` for the user to add input and send — the shared idiom across
+  // surfaces; the engine treats a leading /skill as an invocation.
+  const onSkillSelect = useCallback((name: string) => composerRef.current?.setText(`/${name} `), []);
   return (
     <>
       <ContextChip
@@ -26,6 +42,7 @@ export function App() {
       />
       <Transcript messages={convToMessages(s.conv)} streaming={streaming} onRetry={p.resendMessage} />
       <Composer
+        ref={composerRef}
         disabled={inputLocked(s)}
         placeholder={p.placeholder}
         streaming={streaming}
@@ -36,6 +53,9 @@ export function App() {
         onStop={p.stop}
         contextPct={null}
         sessionLabel={s.sessionLabel}
+        attachCategories={attachCategories}
+        skills={p.skills}
+        onSkillSelect={onSkillSelect}
       />
       {overlayVisible(s) ? (
         <ActivationOverlay

@@ -6,7 +6,7 @@
  * owns the socket lifecycle (connect, reconnect, registry) and injects the
  * effectful handlers; this module is the pure protocol seam between them.
  */
-import { type ChatInbound, isChatInbound } from './chat-protocol';
+import { type ChatInbound, isChatInbound, isSkillsList, type SkillsListMsg } from './chat-protocol';
 
 /** The handshake frame the extension sends immediately on opening a bridge
  *  socket. The bridge replies with `hello_ack`. */
@@ -30,6 +30,8 @@ export interface BridgeFrameHandlers {
   onSpan?: (frame: Record<string, unknown>) => void;
   /** a chat inbound frame (`chat_delta` / `chat_done` / `chat_error` / notice). */
   onChatInbound?: (frame: ChatInbound) => void;
+  /** Session-level (no turn id): the engine's answer to `list_skills`. */
+  onSkills?: (frame: SkillsListMsg) => void;
 }
 
 /** Route one parsed bridge frame to its handler. Non-object / unknown frames are
@@ -50,6 +52,11 @@ export function dispatchBridgeFrame(raw: unknown, handlers: BridgeFrameHandlers)
       return;
     case 'span':
       handlers.onSpan?.(msg);
+      return;
+    case 'skills':
+      // Session-level, so it is dispatched HERE rather than falling through to the
+      // chat-inbound path below, which routes by `frame.id` this frame doesn't have.
+      if (isSkillsList(msg)) handlers.onSkills?.(msg);
       return;
   }
   if (isChatInbound(msg as unknown as ChatInbound)) handlers.onChatInbound?.(msg as unknown as ChatInbound);
