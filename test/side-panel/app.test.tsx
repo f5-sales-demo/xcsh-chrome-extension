@@ -109,3 +109,37 @@ describe('side-panel skills menu', () => {
     expect(bus.posted.filter((m) => m.type === 'chat_request')).toHaveLength(0);
   });
 });
+
+describe('side-panel slash-command menu', () => {
+  it('offers the curated commands and SENDS the picked one (no prefill)', async () => {
+    const { container } = render(<App />);
+
+    const slash = container.querySelector<HTMLElement>('[aria-label="Slash commands"]');
+    expect(slash).toBeTruthy();
+    await act(async () => {
+      slash?.click();
+    });
+    const items = Array.from(container.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(
+      (el) => el.textContent ?? '',
+    );
+    expect(items.some((t) => /\/status/.test(t))).toBe(true);
+    expect(items.some((t) => /\/context/.test(t))).toBe(true);
+    expect(items.some((t) => /\/resources/.test(t))).toBe(true);
+
+    const pick = Array.from(container.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((el) =>
+      /\/status/.test(el.textContent ?? ''),
+    );
+    await act(async () => {
+      pick?.click();
+    });
+
+    // Submitted as a turn, matching the VS Code webview — a slash command is complete
+    // as written, unlike a skill (`/name ` + args) which the Office pane prefills.
+    const prompts = bus.posted.filter((m) => m.type === 'chat_request');
+    expect(prompts).toHaveLength(1);
+    expect((prompts[0] as { text?: string }).text).toBe('/status');
+    // Nothing left sitting in the editor.
+    const editor = container.querySelector<HTMLElement>('[role="textbox"][aria-label="Message input"]');
+    expect(editor?.textContent).toBe('');
+  });
+});
