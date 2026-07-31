@@ -24,8 +24,8 @@ const PANEL_HTML = pathToFileURL(join(REPO, 'dist', 'side-panel.html')).href;
 const ARTIFACTS = join(HERE, '.artifacts');
 const FULL = process.argv.includes('--full'); // also drive the timeout-gated failure renders (slower)
 
-const TAB = { id: 7, url: 'https://acme.console.ves.volterra.io/web/home' };
-const KEY = 'acme|production';
+const TAB = { id: 7, url: 'https://example-corp.console.ves.volterra.io/web/home' };
+const KEY = 'example-corp|production';
 
 // --- locate Chrome-for-Testing (cached by @puppeteer/browsers) or CHROME_BIN ---
 function findChrome() {
@@ -204,11 +204,11 @@ async function main() {
     ok('still gated (overlay up) until page snapshot', (await q(page)).overlay === true);
 
     // 4. correlated page snapshot → ready: overlay gone, input enabled, chip shows the page
-    await push(page, { type: 'page_context', snapshot: { title: 'Acme Console', path: '/web/home' }, reqId });
+    await push(page, { type: 'page_context', snapshot: { title: 'Example Corp Console', path: '/web/home' }, reqId });
     ok('overlay dismissed at ready', await waitFor(page, (s) => s.overlay === false));
     s = await q(page);
     ok('input enabled at ready', s.inputLocked === false, `inputLocked=${s.inputLocked}`);
-    ok('page chip shows the driven page', /Acme Console/.test(s.chip), s.chip);
+    ok('page chip shows the driven page', /Example Corp Console/.test(s.chip), s.chip);
     await page.screenshot({ path: join(ARTIFACTS, '2-ready.png') });
 
     // (The reqId negative path — a stale snapshot for a superseded run is ignored —

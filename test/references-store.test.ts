@@ -131,69 +131,69 @@ describe('interaction modes and tool entries (addendum)', () => {
 describe('SessionIndex (per-tenant session map)', () => {
   it('maps many tabs of one tenant to a single conversation', () => {
     let idx = emptySessionIndex();
-    idx = setTenantConv(idx, 'acme|staging', 10, 'conv-acme');
-    idx = setTenantConv(idx, 'acme|staging', 11, 'conv-acme'); // second tab, same tenant
-    expect(tenantConv(idx, 'acme|staging')).toBe('conv-acme');
-    expect(tabSessionKey(idx, 10)).toBe('acme|staging');
-    expect(tabSessionKey(idx, 11)).toBe('acme|staging');
+    idx = setTenantConv(idx, 'example-corp|staging', 10, 'conv-example-corp');
+    idx = setTenantConv(idx, 'example-corp|staging', 11, 'conv-example-corp'); // second tab, same tenant
+    expect(tenantConv(idx, 'example-corp|staging')).toBe('conv-example-corp');
+    expect(tabSessionKey(idx, 10)).toBe('example-corp|staging');
+    expect(tabSessionKey(idx, 11)).toBe('example-corp|staging');
   });
   it('keeps conversations distinct across tenants and environments', () => {
     let idx = emptySessionIndex();
-    idx = setTenantConv(idx, 'acme|staging', 10, 'conv-a-stg');
-    idx = setTenantConv(idx, 'acme|production', 20, 'conv-a-prod');
+    idx = setTenantConv(idx, 'example-corp|staging', 10, 'conv-a-stg');
+    idx = setTenantConv(idx, 'example-corp|production', 20, 'conv-a-prod');
     idx = setTenantConv(idx, 'globex|staging', 30, 'conv-g-stg');
-    expect(tenantConv(idx, 'acme|staging')).toBe('conv-a-stg');
-    expect(tenantConv(idx, 'acme|production')).toBe('conv-a-prod');
+    expect(tenantConv(idx, 'example-corp|staging')).toBe('conv-a-stg');
+    expect(tenantConv(idx, 'example-corp|production')).toBe('conv-a-prod');
     expect(tenantConv(idx, 'globex|staging')).toBe('conv-g-stg');
   });
   it('removing a tab keeps the tenant conversation (many-tabs -> one-session)', () => {
     let idx = setTenantConv(
-      setTenantConv(emptySessionIndex(), 'acme|staging', 10, 'conv-a'),
-      'acme|staging',
+      setTenantConv(emptySessionIndex(), 'example-corp|staging', 10, 'conv-a'),
+      'example-corp|staging',
       11,
       'conv-a',
     );
     idx = removeTabSession(idx, 10);
     expect(tabSessionKey(idx, 10)).toBeUndefined();
-    expect(tabSessionKey(idx, 11)).toBe('acme|staging');
-    expect(tenantConv(idx, 'acme|staging')).toBe('conv-a'); // conv persists for tab 11 / future tabs
+    expect(tabSessionKey(idx, 11)).toBe('example-corp|staging');
+    expect(tenantConv(idx, 'example-corp|staging')).toBe('conv-a'); // conv persists for tab 11 / future tabs
   });
   it('prunes the per-tab byTenant entry on close, leaving other tabs untouched', () => {
     // Per-tab keying (#136): each tab has a DISTINCT conv key "tenant|env#tabId".
-    let idx = setTenantConv(emptySessionIndex(), 'acme|staging#10', 10, 'conv-a10');
-    idx = setTenantConv(idx, 'acme|staging#11', 11, 'conv-a11');
+    let idx = setTenantConv(emptySessionIndex(), 'example-corp|staging#10', 10, 'conv-a10');
+    idx = setTenantConv(idx, 'example-corp|staging#11', 11, 'conv-a11');
     idx = removeTabSession(idx, 10);
     // the closed tab's reverse mapping AND its orphan-prone byTenant entry are gone
     expect(tabSessionKey(idx, 10)).toBeUndefined();
-    expect(tenantConv(idx, 'acme|staging#10')).toBeUndefined();
+    expect(tenantConv(idx, 'example-corp|staging#10')).toBeUndefined();
     // the other tab's mapping and conversation are untouched
-    expect(tabSessionKey(idx, 11)).toBe('acme|staging#11');
-    expect(tenantConv(idx, 'acme|staging#11')).toBe('conv-a11');
+    expect(tabSessionKey(idx, 11)).toBe('example-corp|staging#11');
+    expect(tenantConv(idx, 'example-corp|staging#11')).toBe('conv-a11');
   });
   it('migrates an old TabIndex to per-tab compound keys (reachable by the live path)', () => {
     // #166 G: the live path reads byTenant ONLY by the compound "tenant|env#tabId"
     // key (tabConvKey). Migration must produce that shape too, else a migrated conv
     // is never matched (silently dropped) and a stale bare key orphans in byTenant.
     const idx = sessionIndexFromTabIndex([
-      { tabId: 5, sessionKey: 'acme|staging', convId: 'conv-old-5' },
+      { tabId: 5, sessionKey: 'example-corp|staging', convId: 'conv-old-5' },
       { tabId: 7, sessionKey: 'globex|production', convId: 'conv-old-7' },
     ]);
     // Reachable under the SAME compound key the live path computes.
-    expect(tenantConv(idx, tabConvKey('acme|staging', 5))).toBe('conv-old-5');
+    expect(tenantConv(idx, tabConvKey('example-corp|staging', 5))).toBe('conv-old-5');
     expect(tenantConv(idx, tabConvKey('globex|production', 7))).toBe('conv-old-7');
     // No bare key leaks into byTenant.
-    expect(tenantConv(idx, 'acme|staging')).toBeUndefined();
-    expect(tabSessionKey(idx, 5)).toBe(tabConvKey('acme|staging', 5));
+    expect(tenantConv(idx, 'example-corp|staging')).toBeUndefined();
+    expect(tabSessionKey(idx, 5)).toBe(tabConvKey('example-corp|staging', 5));
   });
   it('removeTabSession tolerates the compound key and keeps a conv shared by another live tab', () => {
     // Two tabs of one tenant, distinct compound keys but the SAME shared convId.
-    let idx = setTenantConv(emptySessionIndex(), tabConvKey('acme|staging', 5), 5, 'conv-shared');
-    idx = setTenantConv(idx, tabConvKey('acme|staging', 5), 5, 'conv-shared'); // idempotent re-bind
-    idx = setTenantConv(idx, 'acme|staging#5-alias', 6, 'conv-shared'); // another tab → same conv
+    let idx = setTenantConv(emptySessionIndex(), tabConvKey('example-corp|staging', 5), 5, 'conv-shared');
+    idx = setTenantConv(idx, tabConvKey('example-corp|staging', 5), 5, 'conv-shared'); // idempotent re-bind
+    idx = setTenantConv(idx, 'example-corp|staging#5-alias', 6, 'conv-shared'); // another tab → same conv
     idx = removeTabSession(idx, 5);
     expect(tabSessionKey(idx, 5)).toBeUndefined();
-    expect(tenantConv(idx, tabConvKey('acme|staging', 5))).toBeUndefined(); // tab 5's key pruned
-    expect(tabSessionKey(idx, 6)).toBe('acme|staging#5-alias'); // tab 6 untouched
+    expect(tenantConv(idx, tabConvKey('example-corp|staging', 5))).toBeUndefined(); // tab 5's key pruned
+    expect(tabSessionKey(idx, 6)).toBe('example-corp|staging#5-alias'); // tab 6 untouched
   });
 });
 

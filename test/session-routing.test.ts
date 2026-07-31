@@ -72,10 +72,10 @@ describe('late-bind adoption (pre-warm pool)', () => {
 // session key and refuses any worker whose advertised key differs.
 describe('resolveChatPort tenant guard (RC-1)', () => {
   test('refuses a stale-tenant worker on the tab sid; routes only to the matching-tenant worker', () => {
-    // Only worker for tab-1 still advertises the OLD tenant (acme|staging) —
+    // Only worker for tab-1 still advertises the OLD tenant (example-corp|staging) —
     // its socket has not closed yet after the tab moved to beta|production.
     const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
-      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
     ]);
     // Guarded routing for the tab's CURRENT key refuses the stale worker.
     expect(resolveChatPort(1, reg, 'beta|production')).toBeUndefined();
@@ -88,11 +88,11 @@ describe('resolveChatPort tenant guard (RC-1)', () => {
   test('a race with two ports on the same sid picks the port whose tenant matches', () => {
     // Old worker (19222) and new worker (19223) both transiently advertise tab-1.
     const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
-      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
       [19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }],
     ]);
     expect(resolveChatPort(1, reg, 'beta|production')).toBe(19223);
-    expect(resolveChatPort(1, reg, 'acme|staging')).toBe(19222);
+    expect(resolveChatPort(1, reg, 'example-corp|staging')).toBe(19222);
   });
 
   test('a worker advertising tenant but null env never matches a full key', () => {
@@ -116,7 +116,7 @@ describe('resolveChatPort tenant guard (RC-1)', () => {
 describe('staleTabPorts (RC-1 re-tenant detection)', () => {
   type R = Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>;
   test('flags a worker on the tab sid whose tenant differs from the current key', () => {
-    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }]]);
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
     expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([19222]);
   });
   test('keeps a worker whose tenant matches the current key', () => {
@@ -124,16 +124,16 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
     expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([]);
   });
   test('flags the worker when the tab navigated off-console (null current key)', () => {
-    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }]]);
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
     expect(staleTabPorts(reg, 1, null)).toEqual([19222]);
   });
   test('returns nothing when the tab has no worker, and ignores other tabs', () => {
-    const reg: R = new Map([[19223, { sessionId: 'tab-2', tenant: 'acme', env: 'staging' }]]);
+    const reg: R = new Map([[19223, { sessionId: 'tab-2', tenant: 'example-corp', env: 'staging' }]]);
     expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([]);
   });
   test('in an old+new race, flags only the stale (old-tenant) port', () => {
     const reg: R = new Map([
-      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
+      [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
       [19223, { sessionId: 'tab-1', tenant: 'beta', env: 'production' }],
     ]);
     expect(staleTabPorts(reg, 1, 'beta|production')).toEqual([19222]);
@@ -149,11 +149,11 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
 describe('same-tenant multi-tab isolation (B/C)', () => {
   test('two tabs of one tenant resolve to distinct workers via the per-tab path', () => {
     const reg = new Map<number, { sessionId: string; tenant: string; env: string }>([
-      [19222, { sessionId: 'tab-1', tenant: 'acme', env: 'staging' }],
-      [19223, { sessionId: 'tab-2', tenant: 'acme', env: 'staging' }],
+      [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
+      [19223, { sessionId: 'tab-2', tenant: 'example-corp', env: 'staging' }],
     ]);
-    expect(resolveChatPort(1, reg, 'acme|staging')).toBe(19222);
-    expect(resolveChatPort(2, reg, 'acme|staging')).toBe(19223);
+    expect(resolveChatPort(1, reg, 'example-corp|staging')).toBe(19222);
+    expect(resolveChatPort(2, reg, 'example-corp|staging')).toBe(19223);
     expect(portForTab(reg, sidForTab(1))).toBe(19222);
     expect(portForTab(reg, sidForTab(2))).toBe(19223);
   });

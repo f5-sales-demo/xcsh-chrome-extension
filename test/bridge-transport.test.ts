@@ -38,7 +38,7 @@ describe('dispatchBridgeFrame', () => {
   it('routes hello_ack AND tenant_changed → onIdentity', () => {
     const h = spy();
     dispatchBridgeFrame({ type: 'hello_ack', sessionId: 'tab-1' }, h);
-    dispatchBridgeFrame({ type: 'tenant_changed', tenant: 'acme' }, h);
+    dispatchBridgeFrame({ type: 'tenant_changed', tenant: 'example-corp' }, h);
     expect(h.calls.map((c) => c[0])).toEqual(['identity', 'identity']);
   });
   it('routes tool_request → onToolRequest', () => {
@@ -96,7 +96,7 @@ describe('bridge transport over a real WebSocket', () => {
               JSON.stringify({
                 type: 'hello_ack',
                 sessionId: 'tab-7',
-                tenant: 'acme',
+                tenant: 'example-corp',
                 env: 'staging',
                 contextBound: true,
               }),
@@ -141,7 +141,7 @@ describe('bridge transport over a real WebSocket', () => {
     // The client dispatched the identity + tool frames to the right handlers.
     expect(dispatched.map((d) => d[0])).toEqual(expect.arrayContaining(['identity', 'tool']));
     const identity = dispatched.find((d) => d[0] === 'identity')?.[1] as Record<string, unknown>;
-    expect(identity).toMatchObject({ sessionId: 'tab-7', tenant: 'acme', env: 'staging' });
+    expect(identity).toMatchObject({ sessionId: 'tab-7', tenant: 'example-corp', env: 'staging' });
   });
 });
 
