@@ -9,7 +9,7 @@ import {
 
 const base = (over: Partial<SnapshotInputs> = {}): SnapshotInputs => ({
   tabId: 7,
-  url: 'https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1',
+  url: 'https://example-corp.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1',
   title: 'lb1 — Distributed Cloud',
   capturedAt: 1_000,
   ax: { role: 'WebArea', name: 'root', children: [] },

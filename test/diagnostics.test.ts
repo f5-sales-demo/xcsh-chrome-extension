@@ -58,17 +58,20 @@ describe('extractRedirects', () => {
       // console → Keycloak login (302), lands on a tenant realm
       {
         method: 'Network.requestWillBeSent',
-        request: { url: 'https://login.ves.volterra.io/auth/realms/acme-x1/protocol/openid-connect/auth' },
-        redirectResponse: { url: 'https://acme.console.ves.volterra.io/web/home', status: 302 },
+        request: { url: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth' },
+        redirectResponse: { url: 'https://example-corp.console.ves.volterra.io/web/home', status: 302 },
       },
       // a non-redirect event is ignored
-      { method: 'Network.responseReceived', response: { url: 'https://acme.console.ves.volterra.io/', status: 200 } },
+      {
+        method: 'Network.responseReceived',
+        response: { url: 'https://example-corp.console.ves.volterra.io/', status: 200 },
+      },
       // login → back to console (302)
       {
         method: 'Network.requestWillBeSent',
-        request: { url: 'https://acme.console.ves.volterra.io/web/home' },
+        request: { url: 'https://example-corp.console.ves.volterra.io/web/home' },
         redirectResponse: {
-          url: 'https://login.ves.volterra.io/auth/realms/acme-x1/protocol/openid-connect/auth',
+          url: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth',
           status: 302,
         },
       },
@@ -76,12 +79,12 @@ describe('extractRedirects', () => {
     const hops = extractRedirects(events, sessionKeyFromUrl);
     expect(hops).toHaveLength(2);
     expect(hops[0]).toEqual({
-      from: 'https://acme.console.ves.volterra.io/web/home',
-      to: 'https://login.ves.volterra.io/auth/realms/acme-x1/protocol/openid-connect/auth',
+      from: 'https://example-corp.console.ves.volterra.io/web/home',
+      to: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth',
       status: 302,
-      toKey: { tenant: 'acme', env: 'production' },
+      toKey: { tenant: 'example-corp', env: 'production' },
     });
-    expect(hops[1].toKey).toEqual({ tenant: 'acme', env: 'production' });
+    expect(hops[1].toKey).toEqual({ tenant: 'example-corp', env: 'production' });
   });
 });
 
@@ -120,7 +123,7 @@ describe('gateBlockEvidence (RC-3)', () => {
       key: 'f5-amer-ent|production',
       activePort: 19222,
       targetTabId: 7,
-      bridges: [b({ tenant: 'acme', env: 'staging' })], // own sid, wrong tenant
+      bridges: [b({ tenant: 'example-corp', env: 'staging' })], // own sid, wrong tenant
     });
     expect(e.keyLive).toBe(false);
     expect(e.matchingPort).toBeNull();

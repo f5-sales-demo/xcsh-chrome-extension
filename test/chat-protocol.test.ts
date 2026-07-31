@@ -29,9 +29,9 @@ describe('buildChatRequest', () => {
   // RC-1 (#166): the panel supplies the tab's current session key so the SW can
   // refuse a worker still bound to the tab's sid but advertising the OLD tenant.
   it('carries tabId and sessionKey when given', () => {
-    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7, 'acme|staging');
+    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7, 'example-corp|staging');
     expect(m.tabId).toBe(7);
-    expect(m.sessionKey).toBe('acme|staging');
+    expect(m.sessionKey).toBe('example-corp|staging');
   });
   it('omits sessionKey when not given', () => {
     const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7);

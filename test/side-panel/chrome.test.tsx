@@ -14,9 +14,9 @@ describe('chrome components (vendored, under preact)', () => {
   });
 
   it('statusbar shows context% and the tenant session identity, but no cwd/git', () => {
-    const { container, getByText } = render(<StatusBar contextPct={42} sessionLabel="acme·production" />);
+    const { container, getByText } = render(<StatusBar contextPct={42} sessionLabel="example-corp·production" />);
     expect(getByText(/42%/)).toBeTruthy();
-    expect(getByText(/acme·production/)).toBeTruthy();
+    expect(getByText(/example-corp·production/)).toBeTruthy();
     expect(container.querySelector('.seg-session')).toBeTruthy();
     // The browser session is tenant-tied, not filesystem-tied: no cwd/path or git.
     expect(container.querySelector('.seg-path')).toBeNull();
@@ -24,7 +24,7 @@ describe('chrome components (vendored, under preact)', () => {
   });
 
   it('powerline caps are colored CSS-triangle boxes, not Nerd Font glyphs', () => {
-    const { container } = render(<StatusBar contextPct={42} sessionLabel="acme·production" />);
+    const { container } = render(<StatusBar contextPct={42} sessionLabel="example-corp·production" />);
     const capR = container.querySelector('.seg-context .sep-r') as HTMLElement;
     const capL = container.querySelector('.seg-session .sep-l') as HTMLElement;
     expect(capR).toBeTruthy();

@@ -195,7 +195,7 @@ const SNAPSHOT_EXAMPLE: PageContextSnapshot = {
   v: 1,
   capturedAt: 1719000000000,
   tabId: 7,
-  url: 'https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1',
+  url: 'https://example-corp.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1',
   path: '/web/namespaces/default/http_loadbalancers/lb1',
   title: 'lb1 — Distributed Cloud',
   ax: { role: 'WebArea', name: 'lb1', children: [{ role: 'button', name: 'Edit', ref: 'e12' }] },
