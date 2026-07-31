@@ -49,10 +49,10 @@ type Reg = Map<number, { sessionId: string | null; tenant: string | null; env: s
 const allOpen = () => true;
 
 describe('planChatRequest (RC-1 SW-side enforcement)', () => {
-  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging' }]]);
+  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
 
   test('routes to the tab’s worker when open and the key matches', () => {
-    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-id-008|staging' }, reg, allOpen)).toEqual({
+    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-corp|staging' }, reg, allOpen)).toEqual({
       kind: 'route',
       id: 'c1',
       port: 19222,
@@ -69,12 +69,14 @@ describe('planChatRequest (RC-1 SW-side enforcement)', () => {
   });
 
   test('errors when the tab has no worker at all', () => {
-    expect(planChatRequest({ id: 'c1', tabId: 9, sessionKey: 'example-id-008|staging' }, reg, allOpen).kind).toBe('error');
+    expect(planChatRequest({ id: 'c1', tabId: 9, sessionKey: 'example-corp|staging' }, reg, allOpen).kind).toBe(
+      'error',
+    );
   });
 
   test('errors when the resolved worker’s socket is not open', () => {
     const isOpen = (p: number) => p !== 19222;
-    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-id-008|staging' }, reg, isOpen).kind).toBe('error');
+    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-corp|staging' }, reg, isOpen).kind).toBe('error');
   });
 
   test('routes on sid alone when no sessionKey is supplied (back-compat)', () => {
@@ -116,7 +118,7 @@ describe('planToolRequest', () => {
 
 describe('planHelloAck', () => {
   test('ignores a frame with no string sessionId (not a real hello_ack)', () => {
-    expect(planHelloAck({ tenant: 'example-id-008', env: 'staging' }, '1.0.0')).toEqual({ kind: 'ignore' });
+    expect(planHelloAck({ tenant: 'example-corp', env: 'staging' }, '1.0.0')).toEqual({ kind: 'ignore' });
   });
   test('rejects a major contract-version mismatch', () => {
     expect(planHelloAck({ sessionId: 'tab-1', contractVersion: '2.3.0' }, '1.0.0')).toEqual({ kind: 'reject' });
@@ -124,10 +126,10 @@ describe('planHelloAck', () => {
   test('accepts a compatible frame, carrying the identity fields', () => {
     expect(
       planHelloAck(
-        { sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging', contextBound: true, contractVersion: '1.9.0' },
+        { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging', contextBound: true, contractVersion: '1.9.0' },
         '1.0.0',
       ),
-    ).toEqual({ kind: 'accept', sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging', contextBound: true });
+    ).toEqual({ kind: 'accept', sessionId: 'tab-1', tenant: 'example-corp', env: 'staging', contextBound: true });
   });
   test('accepts when contractVersion is absent; contextBound is true ONLY when strictly true', () => {
     expect(planHelloAck({ sessionId: 'spare' }, '1.0.0')).toEqual({
@@ -145,9 +147,9 @@ describe('planHelloAck', () => {
 });
 
 describe('planReTenant (RC-1 source-side eviction)', () => {
-  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging' }]]);
+  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
   test('no-op when the worker on the tab sid already matches the current key', () => {
-    expect(planReTenant(reg, 1, 'example-id-008|staging')).toEqual({ kind: 'noop' });
+    expect(planReTenant(reg, 1, 'example-corp|staging')).toEqual({ kind: 'noop' });
   });
   test('re-tenant: evict the stale port, release + provision the new tenant', () => {
     expect(planReTenant(reg, 1, 'example-id-003')).toEqual({
@@ -176,10 +178,10 @@ describe('planReTenant (RC-1 source-side eviction)', () => {
 });
 
 describe('planSkillsRequest (session-level, so no turn id to carry)', () => {
-  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-id-008', env: 'staging' }]]);
+  const reg: Reg = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
 
   test('routes to the tab’s own worker under the SAME tenant rules as a turn', () => {
-    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-id-008|staging' }, reg, allOpen)).toEqual({
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-corp|staging' }, reg, allOpen)).toEqual({
       kind: 'route',
       port: 19222,
     });
@@ -196,6 +198,8 @@ describe('planSkillsRequest (session-level, so no turn id to carry)', () => {
   });
 
   test('skips when the socket is closed', () => {
-    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-id-008|staging' }, reg, () => false)).toEqual({ kind: 'skip' });
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-corp|staging' }, reg, () => false)).toEqual({
+      kind: 'skip',
+    });
   });
 });

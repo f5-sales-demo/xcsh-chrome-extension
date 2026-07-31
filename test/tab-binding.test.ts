@@ -10,8 +10,8 @@ import {
   shouldAnnounceBind,
 } from '../src/tab-binding';
 
-const CONSOLE = 'https://example-id-008.console.ves.volterra.io/web/x';
-const CONSOLE2 = 'https://example-id-008.staging.volterra.us/web/y';
+const CONSOLE = 'https://example-corp.console.ves.volterra.io/web/x';
+const CONSOLE2 = 'https://example-corp.staging.volterra.us/web/y';
 const OTHER = 'https://example.com/';
 
 describe('isConsoleUrl', () => {
@@ -21,7 +21,7 @@ describe('isConsoleUrl', () => {
   });
   it('rejects example-id-007 hosts, http, and undefined', () => {
     expect(isConsoleUrl(OTHER)).toBe(false);
-    expect(isConsoleUrl('http://example-id-008.volterra.us/')).toBe(false);
+    expect(isConsoleUrl('http://example-corp.volterra.us/')).toBe(false);
     expect(isConsoleUrl(undefined)).toBe(false);
   });
 });
@@ -128,23 +128,23 @@ describe('sessionKeyFromUrl', () => {
     });
   });
   it('keys a production tenant console by (tenant, production)', () => {
-    expect(sessionKeyFromUrl('https://example-id-008.console.ves.volterra.io/web/x')).toEqual({
-      tenant: 'example-id-008',
+    expect(sessionKeyFromUrl('https://example-corp.console.ves.volterra.io/web/x')).toEqual({
+      tenant: 'example-corp',
       env: 'production',
     });
   });
   it('separates staging vs production of the same tenant name', () => {
-    const s = sessionKeyFromUrl('https://example-id-008.staging.volterra.us/web/home');
-    const p = sessionKeyFromUrl('https://example-id-008.console.ves.volterra.io/web/home');
-    expect(s).toEqual({ tenant: 'example-id-008', env: 'staging' });
-    expect(p).toEqual({ tenant: 'example-id-008', env: 'production' });
+    const s = sessionKeyFromUrl('https://example-corp.staging.volterra.us/web/home');
+    const p = sessionKeyFromUrl('https://example-corp.console.ves.volterra.io/web/home');
+    expect(s).toEqual({ tenant: 'example-corp', env: 'staging' });
+    expect(p).toEqual({ tenant: 'example-corp', env: 'production' });
     expect(s).not.toEqual(p);
   });
   it('maps a tenant-realm Keycloak login to that tenant (provisional; refined by 0b)', () => {
     expect(
-      sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/acme-abc123/protocol/openid-connect/auth'),
+      sessionKeyFromUrl('https://login.ves.volterra.io/auth/realms/example-corp-abc123/protocol/openid-connect/auth'),
     ).toEqual({
-      tenant: 'example-id-008',
+      tenant: 'example-corp',
       env: 'production',
     });
   });
@@ -165,8 +165,8 @@ describe('sessionKeyFromUrl', () => {
 
 describe('sessionKeyStr', () => {
   it('renders a stable "tenant|env" string key', () => {
-    expect(sessionKeyStr({ tenant: 'example-id-008', env: 'staging' })).toBe('example-id-008|staging');
-    expect(sessionKeyStr({ tenant: 'example-id-008', env: 'production' })).toBe('example-id-008|production');
+    expect(sessionKeyStr({ tenant: 'example-corp', env: 'staging' })).toBe('example-corp|staging');
+    expect(sessionKeyStr({ tenant: 'example-corp', env: 'production' })).toBe('example-corp|production');
   });
   it('round-trips from a URL', () => {
     const key = sessionKeyFromUrl('https://example-id-006.staging.volterra.us/web/home');

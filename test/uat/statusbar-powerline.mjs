@@ -54,7 +54,7 @@ const HTML = `<!doctype html><html><head>
   <div class="statusbar">
     <span class="seg seg-context" style="background:#1565c0;color:#fff">42%<span class="sep-r" style="background:#1565c0"></span></span>
     <span class="seg-spacer"></span>
-    <span class="seg seg-session" style="background:#ca260a;color:#fff"><span class="sep-l" style="background:#ca260a"></span>acme&middot;production</span>
+    <span class="seg seg-session" style="background:#ca260a;color:#fff"><span class="sep-l" style="background:#ca260a"></span>example-corp&middot;production</span>
   </div>
 </div>
 </body></html>`;

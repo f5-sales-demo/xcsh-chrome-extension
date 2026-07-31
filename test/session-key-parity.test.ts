@@ -19,23 +19,23 @@ import { sessionKeyFromUrl } from '../src/tab-binding';
 // [url, expected] — expected null means "fail closed" (no tenant routing).
 const GOLDEN: Array<[string | undefined, { tenant: string; env: 'production' | 'staging' } | null]> = [
   // production + staging of the same tenant are DISTINCT keys
-  ['https://example-id-008.console.ves.volterra.io/web/x', { tenant: 'example-id-008', env: 'production' }],
-  ['https://example-id-008.staging.volterra.us/web/home', { tenant: 'example-id-008', env: 'staging' }],
+  ['https://example-corp.console.ves.volterra.io/web/x', { tenant: 'example-corp', env: 'production' }],
+  ['https://example-corp.staging.volterra.us/web/home', { tenant: 'example-corp', env: 'staging' }],
   // path/query/fragment are ignored (host-only match)
   ['https://example-id-005.console.ves.volterra.io/web/home?iss=x', { tenant: 'example-id-005', env: 'production' }],
   // Keycloak login realms → tenant (suffix stripped), env by host
   [
-    'https://login.ves.volterra.io/auth/realms/acme-abc123/protocol/openid-connect/auth',
-    { tenant: 'example-id-008', env: 'production' },
+    'https://login.ves.volterra.io/auth/realms/example-corp-abc123/protocol/openid-connect/auth',
+    { tenant: 'example-corp', env: 'production' },
   ],
   [
-    'https://login-staging.volterra.us/auth/realms/acme-x/protocol/openid-connect/auth',
-    { tenant: 'example-id-008', env: 'staging' },
+    'https://login-staging.volterra.us/auth/realms/example-corp-x/protocol/openid-connect/auth',
+    { tenant: 'example-corp', env: 'staging' },
   ],
   // fail-closed: shared SaaS console, shared `volterra` realm, non-console host, IP, junk
   ['https://console.ves.volterra.io/web/devportal/domain', null],
   ['https://login.ves.volterra.io/auth/realms/volterra/protocol/openid-connect/auth', null],
-  ['https://example-id-008.ves.volterra.io', null], // no `.console` — must NOT match production
+  ['https://example-corp.ves.volterra.io', null], // no `.console` — must NOT match production
   ['https://192.168.1.10/web/home', null],
   ['https://api.gateway.internal', null],
   [undefined, null],

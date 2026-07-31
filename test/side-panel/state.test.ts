@@ -142,7 +142,9 @@ describe('activation in panel state', () => {
     const a = act({ connected: true }); // readying (worker active)
     const s = panelReducer(base(), { type: 'set_activation', activation: a });
     expect(s.activation.phase).toBe('readying');
-    expect(panelReducer(s, { type: 'set_session_label', label: 'acme·staging' }).sessionLabel).toBe('acme·staging');
+    expect(panelReducer(s, { type: 'set_session_label', label: 'example-corp·staging' }).sessionLabel).toBe(
+      'example-corp·staging',
+    );
   });
 
   it('overlayVisible is true while readying, blocked, or disconnected', () => {

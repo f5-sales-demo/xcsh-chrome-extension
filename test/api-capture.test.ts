@@ -10,16 +10,20 @@ import {
 describe('isXcResourceApi', () => {
   it('matches a single-resource GET', () => {
     expect(
-      isXcResourceApi('https://acme.console.ves.volterra.io/api/config/namespaces/default/http_loadbalancers/lb1'),
+      isXcResourceApi(
+        'https://example-corp.console.ves.volterra.io/api/config/namespaces/default/http_loadbalancers/lb1',
+      ),
     ).toBe(true);
   });
   it('rejects a list endpoint (no resource name)', () => {
     expect(
-      isXcResourceApi('https://acme.console.ves.volterra.io/api/config/namespaces/default/http_loadbalancers'),
+      isXcResourceApi('https://example-corp.console.ves.volterra.io/api/config/namespaces/default/http_loadbalancers'),
     ).toBe(false);
   });
   it('rejects non-config paths and non-urls', () => {
-    expect(isXcResourceApi('https://acme.console.ves.volterra.io/api/data/namespaces/default/metrics/foo')).toBe(false);
+    expect(
+      isXcResourceApi('https://example-corp.console.ves.volterra.io/api/data/namespaces/default/metrics/foo'),
+    ).toBe(false);
     expect(isXcResourceApi('nonsense')).toBe(false);
   });
 });

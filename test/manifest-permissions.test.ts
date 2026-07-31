@@ -17,7 +17,7 @@ import { grantsUrl } from '../src/host-permission-check';
 // `ws://127.0.0.1:${port}`, DEFAULT_BRIDGE_PORT 19222). The port is irrelevant to
 // host-permission matching; the ws scheme + 127.0.0.1 host are what matter.
 const BRIDGE_URL = 'ws://127.0.0.1:19222';
-const F5_PROD_URL = 'https://acme.console.ves.volterra.io/web/namespaces/default/http_loadbalancers';
+const F5_PROD_URL = 'https://example-corp.console.ves.volterra.io/web/namespaces/default/http_loadbalancers';
 const F5_STAGING_URL = 'https://tenant.staging.volterra.us/web/home';
 
 describe('grantsUrl — host-permission matcher', () => {
