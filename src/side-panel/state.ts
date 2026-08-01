@@ -41,7 +41,7 @@ export type PanelAction =
   | { type: 'page_context'; meta: { title?: string; path?: string } | null; snapshot: unknown }
   | { type: 'begin_turn'; id: string; msgId: string; prompt?: string }
   | { type: 'end_turn' }
-  | { type: 'abort_turn'; at: number; reason?: PanelAbortReason }
+  | { type: 'abort_turn'; at: number; reason: PanelAbortReason }
   | { type: 'suspend_turn' }
   | { type: 'stream'; msg: ChatStreamMsg; at?: number };
 
@@ -95,11 +95,8 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
           active: null,
         };
       }
-      // chat_error — replace the streaming bubble with a visible error block
-      // (old side-panel.ts:594–605), mirroring markAborted's aborted-flag shape.
-      // Carry the machine-readable reason + the prompt so the transcript renders a
-      // distinct, actionable message and Retry can replay the exact turn.
-      const errText = turn.error ?? (a.msg as { error?: string }).error ?? 'Unknown error';
+      // chat_error — retain only the machine-readable reason and retry prompt.
+      // Raw provider text can contain page or customer data and is discarded.
       const msgId = s.active.msgId;
       const reason = (a.msg as ChatErrorMsg).reason;
       const prompt = s.active.prompt;
@@ -112,9 +109,9 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
             m.id === msgId
               ? {
                   ...m,
-                  text: errText,
+                  text: '',
                   aborted: true,
-                  ...(reason ? { abortReason: reason } : {}),
+                  abortReason: reason,
                   ...(prompt ? { retryPrompt: prompt } : {}),
                 }
               : m,
@@ -167,14 +164,11 @@ export function inputLocked(s: Pick<PanelState, 'activation'>): boolean {
  *  re-provisions the worker and resends the prompt ONCE before falling back to
  *  that button. This table IS the committed failure-mode matrix (FAILURE-MODES.md);
  *  failure-modes.test.ts enforces that every reason maps to a distinct, non-terse,
- *  actionable message. For an unclassified error the raw error text is shown instead. */
+ *  actionable message. */
 export interface AbortInfo {
   text: string;
   retryable: boolean;
   autoRecover: boolean;
-  /** Prefer the raw provider error text over `text` when present (a 4xx names the
-   *  actual problem, e.g. an invalid model — more useful than a generic line). */
-  preferRawText?: boolean;
 }
 
 const ABORT_INFO: Record<PanelAbortReason, AbortInfo> = {
@@ -200,14 +194,11 @@ const ABORT_INFO: Record<PanelAbortReason, AbortInfo> = {
     text: 'xcsh could not handle that request.',
     retryable: false,
     autoRecover: false,
-    preferRawText: true,
   },
   'provider-5xx': { text: 'xcsh provider error — try again.', retryable: true, autoRecover: false },
 };
 
-const FALLBACK_ABORT: AbortInfo = { text: 'Turn aborted.', retryable: false, autoRecover: false };
-
 /** Map an abort reason to its user-facing message + recovery affordances. */
-export function abortInfo(reason?: PanelAbortReason): AbortInfo {
-  return reason ? ABORT_INFO[reason] : FALLBACK_ABORT;
+export function abortInfo(reason: PanelAbortReason): AbortInfo {
+  return ABORT_INFO[reason];
 }

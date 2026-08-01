@@ -8,7 +8,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   classifyProbe,
-  NO_WORKER_FOR_TAB,
   planChatRequest,
   planHelloAck,
   planReprovision,
@@ -60,10 +59,9 @@ describe('planChatRequest (RC-1 SW-side enforcement)', () => {
   });
 
   test('errors with a no-worker reason when the worker advertises a DIFFERENT tenant (stale)', () => {
-    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'beta|production' }, reg, allOpen)).toEqual({
+    expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-beta|production' }, reg, allOpen)).toEqual({
       kind: 'error',
       id: 'c1',
-      error: NO_WORKER_FOR_TAB,
       reason: 'no-worker',
     });
   });
@@ -79,8 +77,8 @@ describe('planChatRequest (RC-1 SW-side enforcement)', () => {
     expect(planChatRequest({ id: 'c1', tabId: 1, sessionKey: 'example-corp|staging' }, reg, isOpen).kind).toBe('error');
   });
 
-  test('routes on sid alone when no sessionKey is supplied (back-compat)', () => {
-    expect(planChatRequest({ id: 'c1', tabId: 1 }, reg, allOpen)).toEqual({ kind: 'route', id: 'c1', port: 19222 });
+  test('errors when the panel supplied no sessionKey', () => {
+    expect(planChatRequest({ id: 'c1', tabId: 1 }, reg, allOpen).kind).toBe('error');
   });
 
   test('errors when the panel sent no tabId', () => {
@@ -131,18 +129,22 @@ describe('planHelloAck', () => {
       ),
     ).toEqual({ kind: 'accept', sessionId: 'tab-1', tenant: 'example-corp', env: 'staging', contextBound: true });
   });
-  test('accepts when contractVersion is absent; contextBound is true ONLY when strictly true', () => {
-    expect(planHelloAck({ sessionId: 'spare' }, '1.0.0')).toEqual({
-      kind: 'accept',
-      sessionId: 'spare',
-      tenant: null,
-      env: null,
-      contextBound: false,
+  test('rejects missing contract fields and invalid identity types', () => {
+    expect(planHelloAck({ sessionId: 'spare', tenant: null, env: null, contextBound: false }, '1.0.0')).toEqual({
+      kind: 'reject',
     });
-    expect(planHelloAck({ sessionId: 'tab-1', contextBound: 'yes' }, '1.0.0').kind).toBe('accept');
     expect(
-      (planHelloAck({ sessionId: 'tab-1', contextBound: 'yes' }, '1.0.0') as { contextBound: boolean }).contextBound,
-    ).toBe(false);
+      planHelloAck(
+        {
+          sessionId: 'tab-1',
+          tenant: 'example-corp',
+          env: 'production',
+          contextBound: 'yes',
+          contractVersion: '1.0.0',
+        },
+        '1.0.0',
+      ),
+    ).toEqual({ kind: 'reject' });
   });
 });
 
@@ -152,11 +154,11 @@ describe('planReTenant (RC-1 source-side eviction)', () => {
     expect(planReTenant(reg, 1, 'example-corp|staging')).toEqual({ kind: 'noop' });
   });
   test('re-tenant: evict the stale port, release + provision the new tenant', () => {
-    expect(planReTenant(reg, 1, 'beta|production')).toEqual({
+    expect(planReTenant(reg, 1, 'example-beta|production')).toEqual({
       kind: 'retenant',
       releaseSid: 'tab-1',
       evictPorts: [19222],
-      provisionTenant: 'beta|production',
+      provisionTenant: 'example-beta|production',
     });
   });
   test('navigated off-console (null key): evict + release, but do NOT provision', () => {
@@ -188,7 +190,9 @@ describe('planSkillsRequest (session-level, so no turn id to carry)', () => {
   });
 
   test('refuses a stale-tenant worker (RC-1 applies here too — never a global fallback)', () => {
-    expect(planSkillsRequest({ tabId: 1, sessionKey: 'beta|production' }, reg, allOpen)).toEqual({ kind: 'skip' });
+    expect(planSkillsRequest({ tabId: 1, sessionKey: 'example-beta|production' }, reg, allOpen)).toEqual({
+      kind: 'skip',
+    });
   });
 
   test('a tab with no bound worker is a silent skip, not an error frame', () => {

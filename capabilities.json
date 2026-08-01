@@ -1,6 +1,6 @@
 {
   "version": "0.1.0",
-  "contractVersion": "1.8.0",
+  "contractVersion": "2.0.0",
   "multiPortDiscovery": true,
   "protocol": "tool_request/result",
   "tools": [
@@ -90,29 +90,6 @@
         "required": ["url"],
         "properties": {
           "url": {
-            "type": "string"
-          }
-        }
-      },
-      "flags": {
-        "mutates": true
-      }
-    },
-    {
-      "name": "login",
-      "summary": "Drive the F5 XC OIDC/Keycloak login end-to-end (production + staging consoles).",
-      "category": "navigation",
-      "params": {
-        "type": "object",
-        "required": ["email", "password", "consoleUrl"],
-        "properties": {
-          "email": {
-            "type": "string"
-          },
-          "password": {
-            "type": "string"
-          },
-          "consoleUrl": {
             "type": "string"
           }
         }
@@ -542,7 +519,7 @@
     },
     {
       "name": "diag_bridges",
-      "summary": "List discovered xcsh bridges (port, tenant, env, sessionId, lastSeen) for multi-session diagnostics.",
+      "summary": "List discovered xcsh bridge health without tenant, environment, or session identifiers.",
       "category": "read",
       "params": {
         "type": "object",
@@ -563,16 +540,6 @@
     {
       "name": "diag_ttft",
       "summary": "Diagnostic: init→first-token timeline (per-stage ms, total, dominant, cold/warm).",
-      "category": "read",
-      "params": {
-        "type": "object",
-        "properties": {}
-      },
-      "flags": {}
-    },
-    {
-      "name": "capture_login_flow",
-      "summary": "Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).",
       "category": "read",
       "params": {
         "type": "object",

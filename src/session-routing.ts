@@ -27,15 +27,9 @@ export function resolveToolTab(sourcePort: number | undefined, portToTab: Map<nu
   return portToTab.get(sourcePort) ?? null;
 }
 
-/** The tab a chat turn's page-context snapshot must be built for: the panel's
- *  own (requested) tab when it supplied one, else the controlled/automation tab
- *  as a legacy fallback. Prevents attaching the controlled tab's context to a
- *  turn whose transcript belongs to a different, focused tab (RC-2, #166). */
-export function contextTabFor(
-  requestedTabId: number | undefined,
-  controlledTabId: number | undefined,
-): number | undefined {
-  return typeof requestedTabId === 'number' ? requestedTabId : controlledTabId;
+/** Accept only the tab explicitly owned by the panel message. */
+export function contextTabFor(requestedTabId: unknown): number | undefined {
+  return typeof requestedTabId === 'number' ? requestedTabId : undefined;
 }
 
 /** Ports whose worker is still bound to `tabId`'s sid but advertises a tenant|env
@@ -61,7 +55,7 @@ export function staleTabPorts(registry: Map<number, BridgeLike>, tabId: number, 
  *  turn to another tab's worker and can hit its busy session). undefined when the
  *  tab has no worker or the panel sent no tabId, so the caller refuses.
  *
- *  RC-1 (#166): when `expectedKey` ("tenant|env") is given, the worker must ALSO
+ *  RC-1 (#166): the worker must also
  *  advertise that exact key. The sid ("tab-<id>") is stable across a same-tab
  *  re-login, and the old-tenant worker lingers in the registry until its socket
  *  closes; without this guard a turn for the tab's NEW tenant could route to the
@@ -70,11 +64,10 @@ export function staleTabPorts(registry: Map<number, BridgeLike>, tabId: number, 
 export function resolveChatPort(
   tabId: number | undefined,
   registry: Map<number, BridgeLike>,
-  expectedKey?: string | null,
+  expectedKey: string,
 ): number | undefined {
   if (tabId === undefined) return undefined;
   const sid = sidForTab(tabId);
-  if (!expectedKey) return portForTab(registry, sid);
   for (const [port, info] of registry) {
     if (info.sessionId !== sid) continue;
     if (info.tenant && info.env && `${info.tenant}|${info.env}` === expectedKey) return port;

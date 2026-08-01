@@ -16,6 +16,7 @@ const bus: { posted: Record<string, unknown>[]; push: (m: unknown) => void } = {
   posted: [],
   push: () => {},
 };
+let activeTabs: Array<{ id: number; url: string; title: string }> = [];
 const chromeStub = {
   runtime: {
     connect: () => ({
@@ -31,8 +32,8 @@ const chromeStub = {
   tabs: {
     onActivated: listener,
     onUpdated: listener,
-    query: () => Promise.resolve([]),
-    get: () => Promise.resolve(undefined),
+    query: () => Promise.resolve(activeTabs),
+    get: (tabId: number) => Promise.resolve(activeTabs.find((tab) => tab.id === tabId)),
   },
 };
 
@@ -40,6 +41,7 @@ let prevChrome: unknown;
 beforeEach(() => {
   bus.posted = [];
   bus.push = () => {};
+  activeTabs = [];
   prevChrome = (globalThis as { chrome?: unknown }).chrome;
   (globalThis as { chrome?: unknown }).chrome = chromeStub;
 });
@@ -112,7 +114,26 @@ describe('side-panel skills menu', () => {
 
 describe('side-panel slash-command menu', () => {
   it('offers the curated commands and SENDS the picked one (no prefill)', async () => {
+    activeTabs = [{ id: 7, url: 'https://example-corp.console.ves.volterra.io/web/home', title: 'Example console' }];
     const { container } = render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      bus.push({ type: 'status', connected: true });
+      bus.push({
+        type: 'bridges',
+        tenants: [{ tenant: 'example-corp|production', contextBound: true }],
+      });
+      await Promise.resolve();
+    });
+    const contextRequest = [...bus.posted].reverse().find((message) => message.type === 'get_page_context');
+    await act(async () => {
+      bus.push({
+        type: 'page_context',
+        snapshot: { title: 'Example console', path: '/web/home' },
+        reqId: contextRequest?.reqId,
+      });
+    });
 
     const slash = container.querySelector<HTMLElement>('[aria-label="Slash commands"]');
     expect(slash).toBeTruthy();

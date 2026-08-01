@@ -54,10 +54,6 @@ describe('failure-mode matrix (FAILURE-MODES.md)', () => {
     }
   });
 
-  it('an unknown/absent reason falls back to the bare "Turn aborted." (legacy, not retryable)', () => {
-    expect(abortInfo(undefined)).toEqual({ text: 'Turn aborted.', retryable: false, autoRecover: false });
-  });
-
   it('covers every wire ChatErrorReason (no emittable cause is unmapped)', () => {
     for (const reason of CHAT_ERROR_REASONS) {
       expect(EXPECTED[reason]).toBeDefined();

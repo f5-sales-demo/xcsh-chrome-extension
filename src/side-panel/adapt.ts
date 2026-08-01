@@ -41,7 +41,7 @@ function citedSources(conv: Conversation, refIds: string[] | undefined): ChatRef
 
 /**
  * Conversation rows → shared `ChatMessage[]`. Aborted turns fold to error rows
- * using the per-reason copy (or the raw provider text for a 4xx), and carry
+ * using fixed per-reason copy, and carry
  * `retryText` ONLY when the reason is retryable and the prompt was captured — the
  * shared Transcript then offers Retry on the LAST such row (matching the old
  * local Transcript's `id === lastId` gate). A settled answer also carries the
@@ -53,8 +53,9 @@ export function convToMessages(conv: Conversation): ChatMessage[] {
       return { id: m.id, role: 'tool', text: m.text, tool: m.tool ?? 'tool', ok: m.ok ?? true };
     }
     if (m.aborted) {
+      if (!m.abortReason) return { id: m.id, role: m.role, text: 'Invalid abort state.', error: true };
       const info = abortInfo(m.abortReason);
-      const text = m.abortReason ? (info.preferRawText && m.text ? m.text : info.text) : m.text || 'Turn aborted.';
+      const text = info.text;
       const retryText = info.retryable && m.retryPrompt ? m.retryPrompt : undefined;
       return { id: m.id, role: m.role, text, error: true, ...(retryText ? { retryText } : {}) };
     }

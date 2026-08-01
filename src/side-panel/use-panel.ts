@@ -1,6 +1,6 @@
 /**
- * Panel controller hook. Owns the long-lived chat Port, per-(tenant,tab) session
- * load/save, the 30s turn timeout, and — new — the tab-activation READINESS
+ * Panel controller hook. Owns the long-lived chat Port, transient per-tab
+ * session state, the turn timeout, and the tab-activation readiness
  * machine: it maps real Chrome/Port signals (status, bridges, page_context) to
  * pure activation gate events (see activation.ts), owns the per-gate timeout
  * timers, forwards per-gate timing frames to the SW, and correlates a page
@@ -18,20 +18,27 @@ import {
   type InteractionMode,
   isChatInbound,
   isSkillsList,
+  type PanelAbortReason,
   type SkillInfo,
 } from '../chat-protocol';
 import {
   appendToolNotice,
   appendUserMessage,
   newConversation,
-  removeTabSession,
   setMode as setConvMode,
   setTenantConv,
   startAssistant,
   tabConvKey,
+  tabSessionKey,
   tenantConv,
 } from '../references-store';
-import { loadConversation, loadSessionIndex, saveConversation, saveSessionIndex } from '../side-panel-store';
+import {
+  discardTabSession,
+  loadConversation,
+  loadSessionIndex,
+  saveConversation,
+  saveSessionIndex,
+} from '../side-panel-store';
 import { sessionKeyFromUrl, sessionKeyStr } from '../tab-binding';
 import { PortBus } from '../ui/bus';
 import {
@@ -101,7 +108,13 @@ export function usePanel() {
     }
   }
 
-  // Debounced 300ms save (old scheduleSave, lines 104–110).
+  function cancelScheduledSave() {
+    if (!saveTimer.current) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+  }
+
+  // Debounced update to the process-local conversation map.
   function scheduleSave() {
     if (saveTimer.current) return;
     saveTimer.current = setTimeout(() => {
@@ -110,15 +123,21 @@ export function usePanel() {
     }, 300);
   }
 
-  // Per-(tenant,tab) session load/save (old switchToTenantSession, lines 316–333).
+  // Per-(tenant,tab) process-local session selection.
   async function switchToTenantSession(sessionKey: string | null, tabId?: number) {
     boundSessionKey.current = sessionKey;
     if (!sessionKey || tabId === undefined) {
       dispatch({ type: 'set_conv', conv: newConversation(`conv-${crypto.randomUUID()}`, now()) });
       return;
     }
-    const idx = await loadSessionIndex();
     const convKey = tabConvKey(sessionKey, tabId);
+    let idx = await loadSessionIndex();
+    const previousKey = tabSessionKey(idx, tabId);
+    if (previousKey && previousKey !== convKey) {
+      cancelScheduledSave();
+      await discardTabSession(tabId);
+      idx = await loadSessionIndex();
+    }
     const convId = tenantConv(idx, convKey);
     const existing = convId ? await loadConversation(convId) : null;
     const conv = existing ?? newConversation(`conv-${crypto.randomUUID()}`, now());
@@ -130,10 +149,16 @@ export function usePanel() {
   }
 
   // Adopt the CURRENT in-flight conv for a tab the automation binds mid-turn
-  // (old adoptCurrentConvForTenant, 346–352).
+  // and discard any prior tenant transcript for that same tab.
   async function adoptCurrentConvForTenant(sessionKey: string, tabId: number) {
-    const idx = await loadSessionIndex();
     const convKey = tabConvKey(sessionKey, tabId);
+    let idx = await loadSessionIndex();
+    const previousKey = tabSessionKey(idx, tabId);
+    if (previousKey && previousKey !== convKey) {
+      cancelScheduledSave();
+      await discardTabSession(tabId);
+      idx = await loadSessionIndex();
+    }
     if (tenantConv(idx, convKey)) return;
     const conv = stateRef.current.conv;
     await saveSessionIndex(setTenantConv(idx, convKey, tabId, conv.id));
@@ -245,10 +270,12 @@ export function usePanel() {
     let tab: chrome.tabs.Tab | undefined;
     if (tabId !== undefined) tab = await chrome.tabs.get(tabId).catch(() => undefined);
     if (!tab) tab = (await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []))[0];
+    const switchingTabs = tab?.id !== boundTabId.current;
+    if (switchingTabs) cancelScheduledSave();
     // Suspend a running turn ONLY when moving to a DIFFERENT tab, not on a same-tab
     // URL change (a turn's own navigation fires onUpdated → here; suspending then
     // would drop its stream). See #175.
-    if (stateRef.current.active && tab?.id !== boundTabId.current) {
+    if (stateRef.current.active && switchingTabs) {
       await saveConversation(stateRef.current.conv);
       pendingResend.current = null; // switching tabs → don't surprise-send on the other tab
       dispatch({ type: 'suspend_turn' });
@@ -340,14 +367,13 @@ export function usePanel() {
       }
       if (msg.type === 'tab_unbound' || msg.type === 'tab_inactive') return;
       if (msg.type === 'tab_closed') {
+        cancelScheduledSave();
         if ((msg.tabId as number) === boundTabId.current && stateRef.current.active) {
           if (turnTimeout.current) clearTimeout(turnTimeout.current);
           pendingResend.current = null; // the tab is gone — nothing to resend to
           dispatch({ type: 'abort_turn', at: now(), reason: 'tab-closed' });
         }
-        loadSessionIndex()
-          .then((i) => saveSessionIndex(removeTabSession(i, msg.tabId as number)))
-          .catch(() => {});
+        discardTabSession(msg.tabId as number).catch(() => {});
         return;
       }
       if (msg.type === 'page_context') {
@@ -395,9 +421,11 @@ export function usePanel() {
     if (turnTimeout.current) clearTimeout(turnTimeout.current);
     turnTimeout.current = setTimeout(() => {
       if (stateRef.current.active?.id === turnId) {
-        dispatch({ type: 'abort_turn', at: now(), reason: 'first-token-timeout' });
+        const action = { type: 'abort_turn' as const, at: now(), reason: 'first-token-timeout' as const };
+        const next = panelReducer(stateRef.current, action);
+        dispatch(action);
         if (!pendingResend.current) pendingResend.current = { text, used: false };
-        saveConversation(stateRef.current.conv).catch(() => {});
+        saveConversation(next.conv).catch(() => {});
         if (boundSessionKey.current) beginActivation(boundSessionKey.current, boundTabId.current);
       }
     }, TURN_TIMEOUT_MS);
@@ -438,17 +466,19 @@ export function usePanel() {
     if (ev.type === 'chat_error' && abortInfo((ev as ChatErrorMsg).reason).autoRecover && !pendingResend.current) {
       pendingResend.current = { text: active.prompt, used: false };
     }
-    dispatch({ type: 'stream', msg: ev as ChatStreamMsg, at: now() });
+    const action = { type: 'stream' as const, msg: ev as ChatStreamMsg, at: now() };
+    const next = panelReducer(stateRef.current, action);
+    dispatch(action);
     const t = (ev as ChatStreamMsg).type;
     if (t === 'chat_delta') scheduleSave();
-    else saveConversation(stateRef.current.conv).catch(() => {});
+    else saveConversation(next.conv).catch(() => {});
   }
 
   // Send (old sendMessage, 611–663).
   function sendMessage(text: string) {
     const s = stateRef.current;
     if (!text || s.active) return;
-    const notify = (notice: string) => {
+    const notify = (notice: string, reason: PanelAbortReason) => {
       let conv = appendUserMessage(s.conv, {
         id: `u-${crypto.randomUUID()}`,
         role: 'user',
@@ -460,7 +490,7 @@ export function usePanel() {
       conv = {
         ...conv,
         messages: conv.messages.map((m, i) =>
-          i === conv.messages.length - 1 ? { ...m, text: notice, aborted: true } : m,
+          i === conv.messages.length - 1 ? { ...m, text: notice, aborted: true, abortReason: reason } : m,
         ),
       };
       dispatch({ type: 'set_conv', conv });
@@ -470,13 +500,20 @@ export function usePanel() {
     // reason per-send (parity with old side-panel.ts:612–627) rather than hang.
     if (inputLocked(s)) {
       const p = s.activation.phase;
+      const reason: PanelAbortReason = p === 'disconnected' ? 'bridge-disconnected' : 'no-worker';
       return notify(
         p === 'disconnected'
           ? 'xcsh not connected — start the xcsh CLI, then resend.'
           : p === 'blocked'
             ? 'No xcsh running for this tab — start the xcsh CLI, then resend.'
             : 'xcsh is starting for this tab — one moment, then resend.',
+        reason,
       );
+    }
+    const tabId = boundTabId.current;
+    const sessionKey = boundSessionKey.current;
+    if (tabId === undefined || sessionKey === null) {
+      return notify('No bound F5 console tab is available.', 'no-worker');
     }
     const userMsgId = `u-${crypto.randomUUID()}`;
     let conv = appendUserMessage(s.conv, {
@@ -501,9 +538,9 @@ export function usePanel() {
         text,
         s.attachContext ? latestContext.current : null,
         s.conv.mode,
+        tabId,
+        sessionKey,
         s.conv.id,
-        boundTabId.current,
-        boundSessionKey.current,
       ),
     );
   }
@@ -514,8 +551,10 @@ export function usePanel() {
     bus.post(buildChatStop(active.id));
     if (turnTimeout.current) clearTimeout(turnTimeout.current);
     pendingResend.current = null; // a deliberate stop is not recoverable
-    dispatch({ type: 'abort_turn', at: now(), reason: 'user-stop' });
-    saveConversation(stateRef.current.conv).catch(() => {});
+    const action = { type: 'abort_turn' as const, at: now(), reason: 'user-stop' as const };
+    const next = panelReducer(stateRef.current, action);
+    dispatch(action);
+    saveConversation(next.conv).catch(() => {});
   }
 
   /** Replay a failed turn's prompt (the per-message Retry affordance). No-ops if a

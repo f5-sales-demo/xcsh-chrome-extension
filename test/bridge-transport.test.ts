@@ -50,7 +50,9 @@ describe('dispatchBridgeFrame', () => {
     const h = spy();
     dispatchBridgeFrame({ type: 'chat_delta', id: 'c-1', seq: 0, delta: 'x' }, h);
     dispatchBridgeFrame({ type: 'chat_done', id: 'c-1' }, h);
-    expect(h.calls.map((c) => c[0])).toEqual(['chat', 'chat']);
+    dispatchBridgeFrame({ type: 'chat_error', id: 'c-1', reason: 'provider-5xx' }, h);
+    dispatchBridgeFrame({ type: 'chat_error', id: 'c-1' }, h);
+    expect(h.calls.map((c) => c[0])).toEqual(['chat', 'chat', 'chat']);
   });
   it('routes a span frame to onSpan and nothing else', () => {
     const got: unknown[] = [];
@@ -99,6 +101,7 @@ describe('bridge transport over a real WebSocket', () => {
                 tenant: 'example-corp',
                 env: 'staging',
                 contextBound: true,
+                contractVersion: '9.9.9',
               }),
             );
             ws.send(JSON.stringify({ type: 'ping' }));

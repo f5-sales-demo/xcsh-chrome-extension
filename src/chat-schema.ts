@@ -71,6 +71,8 @@ export const ChatRequestSchema = Type.Object({
   text: Type.String(),
   context: Type.Union([Type.Null(), PageContextSnapshotSchema]),
   mode: InteractionModeSchema,
+  tabId: Type.Number(),
+  sessionKey: Type.String({ minLength: 1 }),
   history_hint: Type.Optional(Type.String()),
 });
 
@@ -95,8 +97,7 @@ export const ChatDoneSchema = Type.Object({
 export const ChatErrorSchema = Type.Object({
   type: Type.Literal('chat_error'),
   id: ChatId,
-  error: Type.String(),
-  reason: Type.Optional(Type.Union(CHAT_ERROR_REASONS.map((r) => Type.Literal(r)))),
+  reason: Type.Union(CHAT_ERROR_REASONS.map((r) => Type.Literal(r))),
 });
 
 export const ChatToolNoticeSchema = Type.Object({
@@ -217,6 +218,8 @@ const chatRequest: ChatRequestMsg = {
   text: 'What does this load balancer do?',
   context: SNAPSHOT_EXAMPLE,
   mode: 'educational',
+  tabId: 7,
+  sessionKey: 'example-corp|production',
   history_hint: 'conv-1',
 };
 const chatRequestNoContext: ChatRequestMsg = {
@@ -225,6 +228,8 @@ const chatRequestNoContext: ChatRequestMsg = {
   text: 'help me build a WAF policy',
   context: null,
   mode: 'configuration',
+  tabId: 7,
+  sessionKey: 'example-corp|production',
 };
 const chatStop: ChatStopMsg = { type: 'chat_stop', id: 'c-1111' };
 const chatDelta: ChatDeltaMsg = { type: 'chat_delta', id: 'c-1111', seq: 0, delta: 'This LB ' };
@@ -238,7 +243,6 @@ const chatDoneNoRefs: ChatDoneMsg = { type: 'chat_done', id: 'c-1111' };
 const chatError: ChatErrorMsg = {
   type: 'chat_error',
   id: 'c-1111',
-  error: 'HTTP 403 forbidden',
   reason: 'provider-4xx',
 };
 const chatToolNotice: ChatToolNoticeMsg = { type: 'chat_tool_notice', id: 'c-1111', tool: 'navigate', ok: true };
@@ -313,8 +317,40 @@ export const CHAT_EXAMPLES = {
     {
       schema: 'chat_request',
       why: 'missing text',
-      value: { type: 'chat_request', id: 'c-1', context: null, mode: 'educational' },
+      value: {
+        type: 'chat_request',
+        id: 'c-1',
+        context: null,
+        mode: 'educational',
+        tabId: 7,
+        sessionKey: 'example-corp|production',
+      },
     },
+    {
+      schema: 'chat_request',
+      why: 'missing tabId',
+      value: {
+        type: chatRequest.type,
+        id: chatRequest.id,
+        text: chatRequest.text,
+        context: chatRequest.context,
+        mode: chatRequest.mode,
+        sessionKey: chatRequest.sessionKey,
+      },
+    },
+    {
+      schema: 'chat_request',
+      why: 'missing sessionKey',
+      value: {
+        type: chatRequest.type,
+        id: chatRequest.id,
+        text: chatRequest.text,
+        context: chatRequest.context,
+        mode: chatRequest.mode,
+        tabId: chatRequest.tabId,
+      },
+    },
+    { schema: 'chat_error', why: 'missing reason', value: { type: 'chat_error', id: 'c-1' } },
     { schema: 'chat_delta', why: 'missing seq', value: { type: 'chat_delta', id: 'c-1', delta: 'x' } },
     { schema: 'page_context_snapshot', why: 'wrong version', value: { ...SNAPSHOT_EXAMPLE, v: 2 } },
     {

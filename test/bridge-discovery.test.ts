@@ -27,17 +27,21 @@ describe('bridge-discovery', () => {
   });
 
   test('tenantToPort maps only bridges that reported tenant+env', () => {
-    const m = reg([19222, 'alpha', 'staging', 0], [19223, null, null, 0], [19224, 'beta', 'production', 0]);
+    const m = reg(
+      [19222, 'example-alpha', 'staging', 0],
+      [19223, null, null, 0],
+      [19224, 'example-beta', 'production', 0],
+    );
     const t = tenantToPort(m);
-    expect(t.get('alpha|staging')).toBe(19222);
-    expect(t.get('beta|production')).toBe(19224);
+    expect(t.get('example-alpha|staging')).toBe(19222);
+    expect(t.get('example-beta|production')).toBe(19224);
     expect(t.size).toBe(2);
   });
 
   test('portForTenant resolves a session key, undefined when absent/null', () => {
-    const m = reg([19222, 'alpha', 'staging', 0]);
-    expect(portForTenant(m, 'alpha|staging')).toBe(19222);
-    expect(portForTenant(m, 'beta|staging')).toBeUndefined();
+    const m = reg([19222, 'example-alpha', 'staging', 0]);
+    expect(portForTenant(m, 'example-alpha|staging')).toBe(19222);
+    expect(portForTenant(m, 'example-beta|staging')).toBeUndefined();
     expect(portForTenant(m, null)).toBeUndefined();
   });
 
@@ -48,10 +52,14 @@ describe('bridge-discovery', () => {
   });
 
   test('liveTenants lists session keys with a tenant+env and their contextBound state', () => {
-    const m = reg([19222, 'alpha', 'staging', 0, true], [19223, null, null, 0], [19224, 'beta', 'production', 0]);
+    const m = reg(
+      [19222, 'example-alpha', 'staging', 0, true],
+      [19223, null, null, 0],
+      [19224, 'example-beta', 'production', 0],
+    );
     expect(liveTenants(m)).toEqual([
-      { tenant: 'alpha|staging', contextBound: true },
-      { tenant: 'beta|production', contextBound: false },
+      { tenant: 'example-alpha|staging', contextBound: true },
+      { tenant: 'example-beta|production', contextBound: false },
     ]);
   });
 
@@ -62,15 +70,15 @@ describe('bridge-discovery', () => {
   // "tenant|env" with no env half) — MUST be excluded here, not partially kept.
   test('liveTenants + tenantToPort exclude asymmetric frames (tenant XOR env)', () => {
     const m = reg(
-      [19222, 'full', 'production', 0], // both → kept
-      [19223, 'tenantonly', null, 0], // env missing → excluded
+      [19222, 'example-full', 'production', 0], // both → kept
+      [19223, 'example-tenantonly', null, 0], // env missing → excluded
       [19224, null, 'production', 0], // tenant missing → excluded
       [19225, null, null, 0], // both missing → excluded
       [19226, '', '', 0], // empty strings → excluded
     );
-    expect(liveTenants(m)).toEqual([{ tenant: 'full|production', contextBound: false }]);
-    expect([...tenantToPort(m).keys()]).toEqual(['full|production']);
-    expect(portForTenant(m, 'tenantonly|production')).toBeUndefined();
-    expect(portForTenant(m, 'full|production')).toBe(19222);
+    expect(liveTenants(m)).toEqual([{ tenant: 'example-full|production', contextBound: false }]);
+    expect([...tenantToPort(m).keys()]).toEqual(['example-full|production']);
+    expect(portForTenant(m, 'example-tenantonly|production')).toBeUndefined();
+    expect(portForTenant(m, 'example-full|production')).toBe(19222);
   });
 });

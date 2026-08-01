@@ -49,24 +49,18 @@ describe('convToMessages', () => {
     expect(m.retryText).toBeUndefined();
   });
 
-  it('a 4xx prefers the raw provider text over the generic copy', () => {
+  it('a 4xx uses fixed copy and discards raw provider text', () => {
     const [m] = convToMessages(
       conv([
         { id: 'a1', role: 'assistant', text: 'model not found', at: 0, aborted: true, abortReason: 'provider-4xx' },
       ]),
     );
-    expect(m.text).toBe('model not found');
+    expect(m.text).toBe('xcsh could not handle that request.');
   });
 
-  it('an unclassified abort (no reason) falls back to the raw text or "Turn aborted."', () => {
-    const [withText, withoutText] = convToMessages(
-      conv([
-        { id: 'a1', role: 'assistant', text: 'boom', at: 0, aborted: true },
-        { id: 'a2', role: 'assistant', text: '', at: 0, aborted: true },
-      ]),
-    );
-    expect(withText.text).toBe('boom');
-    expect(withoutText.text).toBe('Turn aborted.');
+  it('fails closed for an invalid abort state with no reason', () => {
+    const [message] = convToMessages(conv([{ id: 'a1', role: 'assistant', text: 'boom', at: 0, aborted: true }]));
+    expect(message.text).toBe('Invalid abort state.');
   });
 });
 

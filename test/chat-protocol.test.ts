@@ -11,31 +11,33 @@ import {
 
 describe('buildChatRequest', () => {
   it('shapes a chat_request with passthrough context and mode', () => {
-    const m = buildChatRequest('c-1', 'hi', { url: 'x' }, 'educational', 'conv-1');
+    const m = buildChatRequest('c-1', 'hi', { url: 'x' }, 'educational', 7, 'example-corp|production', 'conv-1');
     expect(m).toEqual({
       type: 'chat_request',
       id: 'c-1',
       text: 'hi',
       context: { url: 'x' },
       mode: 'educational',
+      tabId: 7,
+      sessionKey: 'example-corp|production',
       history_hint: 'conv-1',
     });
   });
   it('omits history_hint when not given', () => {
-    const m = buildChatRequest('c-1', 'hi', null, 'presentation');
+    const m = buildChatRequest('c-1', 'hi', null, 'presentation', 7, 'example-corp|production');
     expect('history_hint' in m).toBe(false);
     expect(m.mode).toBe('presentation');
   });
   // RC-1 (#166): the panel supplies the tab's current session key so the SW can
   // refuse a worker still bound to the tab's sid but advertising the OLD tenant.
   it('carries tabId and sessionKey when given', () => {
-    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7, 'example-corp|staging');
+    const m = buildChatRequest('c-1', 'hi', null, 'educational', 7, 'example-corp|staging');
     expect(m.tabId).toBe(7);
     expect(m.sessionKey).toBe('example-corp|staging');
   });
-  it('omits sessionKey when not given', () => {
-    const m = buildChatRequest('c-1', 'hi', null, 'educational', undefined, 7);
-    expect('sessionKey' in m).toBe(false);
+  it('always carries the isolation key and bound tab', () => {
+    const m = buildChatRequest('c-1', 'hi', null, 'educational', 7, 'example-corp|production');
+    expect(m).toMatchObject({ tabId: 7, sessionKey: 'example-corp|production' });
   });
 });
 
@@ -78,11 +80,10 @@ describe('reduceChatTurn', () => {
 
   it('records errors and ignores events after a terminal state', () => {
     const s = feed([
-      { type: 'chat_error', id: 'c-1', error: 'boom' },
+      { type: 'chat_error', id: 'c-1', reason: 'provider-5xx' },
       { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'late' },
     ]);
     expect(s.status).toBe('error');
-    expect(s.error).toBe('boom');
     expect(s.text).toBe('');
   });
 
@@ -108,7 +109,8 @@ describe('isChatInbound', () => {
   it('accepts chat_delta, chat_done, chat_error, and chat_tool_notice', () => {
     expect(isChatInbound({ type: 'chat_delta', id: 'c', seq: 0, delta: '' })).toBe(true);
     expect(isChatInbound({ type: 'chat_done', id: 'c' })).toBe(true);
-    expect(isChatInbound({ type: 'chat_error', id: 'c', error: 'x' })).toBe(true);
+    expect(isChatInbound({ type: 'chat_error', id: 'c', reason: 'provider-5xx' })).toBe(true);
+    expect(isChatInbound({ type: 'chat_error', id: 'c' })).toBe(false);
     expect(isChatInbound({ type: 'chat_tool_notice', id: 'c', tool: 'grep', ok: true })).toBe(true);
     expect(isChatInbound({ type: 'chat_keepalive', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'tool_result', id: '1' })).toBe(false);

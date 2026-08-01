@@ -2,9 +2,8 @@
  * Pure diagnostics helpers for Phase 0 investigation — Chrome-free and DOM-free
  * so they unit-test in isolation. The service worker records events into a
  * capped ring buffer (SW (re)start, suspend/canceled, keepalive ticks, WS
- * open/close, would-bind activations) and exposes them via the `diag_suspension`
- * tool; `capture_login_flow` uses `extractRedirects` to turn captured CDP
- * network events into an annotated redirect chain for login-topology analysis.
+ * open/close, would-bind activations) and exposes bounded, metric-only summaries
+ * without retaining customer identifiers, credentials, or page URLs.
  */
 
 /** A single timestamped diagnostics record. */
@@ -15,6 +14,62 @@ export interface DiagEvent {
   event: string;
   /** Arbitrary structured detail (wsState, tabId, url, tenant, …). */
   [k: string]: unknown;
+}
+
+export const DIAG_STORAGE_KEYS = ['xcsh.diag.metrics.v2', 'xcsh.diag.noise.v2'] as const;
+export const LEGACY_DIAG_STORAGE_KEYS = ['xcsh.diag.suspension', 'xcsh.diag.noise'] as const;
+
+const SAFE_DIAGNOSTIC_STRING_VALUES: Record<string, ReadonlySet<string>> = {
+  action: new Set(['bind', 'inactive', 'keep', 'unbind']),
+  diagnosis: new Set(['asymmetric-frame', 'no-own-worker', 'not-a-block', 'stale-key']),
+  kind: new Set(['provision', 'release']),
+  wsState: new Set(['closed', 'connecting', 'none', 'open']),
+};
+const SAFE_DIAGNOSTIC_BOOLEAN_KEYS = new Set(['error', 'ok']);
+const SAFE_DIAGNOSTIC_NUMBER_KEYS = new Set(['ms', 'port']);
+
+/** Keep only bounded metrics used by the persisted diagnostic summaries.
+ * Unknown fields, arbitrary strings, and invalid numbers fail closed. */
+export function safeDiagnosticDetail(
+  detail: Record<string, unknown>,
+): Record<string, string | number | boolean | null> {
+  const safe: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(detail)) {
+    const allowedStrings = SAFE_DIAGNOSTIC_STRING_VALUES[key];
+    if (typeof value === 'string' && allowedStrings?.has(value)) safe[key] = value;
+    else if (typeof value === 'boolean' && SAFE_DIAGNOSTIC_BOOLEAN_KEYS.has(key)) safe[key] = value;
+    else if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && SAFE_DIAGNOSTIC_NUMBER_KEYS.has(key))
+      safe[key] = value;
+  }
+  return safe;
+}
+
+export interface BridgeDiagnosticInput {
+  port: number;
+  tenant: string | null;
+  env: string | null;
+  sessionId: string | null;
+  lastSeen: number;
+  contextBound: boolean;
+}
+
+export interface PublicBridgeDiagnostic {
+  port: number;
+  lastSeen: number;
+  contextBound: boolean;
+  identityBound: boolean;
+  sessionBound: boolean;
+}
+
+/** Expose bridge health without exporting tenant, environment, or session values. */
+export function publicBridgeDiagnostics(rows: readonly BridgeDiagnosticInput[]): PublicBridgeDiagnostic[] {
+  return rows.map((row) => ({
+    port: row.port,
+    lastSeen: row.lastSeen,
+    contextBound: row.contextBound,
+    identityBound: Boolean(row.tenant && row.env),
+    sessionBound: Boolean(row.sessionId),
+  }));
 }
 
 /** Push onto a ring buffer, dropping the oldest when over `cap` (in place). */
@@ -57,33 +112,29 @@ export interface TurnSummary {
   errored: number;
   /** routed turns that received at least one inbound reply. */
   replied: number;
-  /** routed turn ids with NO reply in the buffer — the "accepted but stalled" or
-   *  "delivered but dropped" signal that gate_block never captured (#170). */
-  unanswered: string[];
+  /** Routed turns with no first reply observed in the buffer. */
+  unanswered: number;
   /** slowest observed first-reply latency (ms). */
   maxReplyMs: number;
 }
 
-/** Pair `chat_route` events (turn → port, or error) with `chat_reply` events
- *  (first-inbound latency) by turn id, so a routed-but-unanswered turn surfaces
- *  in diag_suspension. Pure: the SW stamps the events + latency; this only reads. */
+/** Aggregate route and first-reply events without retaining turn identifiers. */
 export function summarizeTurns(events: DiagEvent[]): TurnSummary {
-  const routedIds = new Set<string>();
-  const repliedIds = new Set<string>();
+  let routed = 0;
+  let replies = 0;
   let errored = 0;
   let maxReplyMs = 0;
   for (const e of events) {
     if (e.event === 'chat_route') {
-      if (typeof e.port === 'number') routedIds.add(String(e.id));
+      if (typeof e.port === 'number') routed++;
       else if (e.error === true) errored++;
     } else if (e.event === 'chat_reply') {
-      repliedIds.add(String(e.id));
+      replies++;
       if (typeof e.ms === 'number' && e.ms > maxReplyMs) maxReplyMs = e.ms;
     }
   }
-  const unanswered = [...routedIds].filter((id) => !repliedIds.has(id));
-  const replied = routedIds.size - unanswered.length;
-  return { routed: routedIds.size, errored, replied, unanswered, maxReplyMs };
+  const replied = Math.min(routed, replies);
+  return { routed, errored, replied, unanswered: routed - replied, maxReplyMs };
 }
 
 /** Summarize a diagnostics buffer into the numbers we care about for Phase 0a. */
@@ -127,7 +178,7 @@ export interface GateBlockEvidence {
   matchingPort: number | null;
   activePort: number | null;
   targetTabId: number | null;
-  diagnosis: string;
+  diagnosis: 'asymmetric-frame' | 'no-own-worker' | 'not-a-block' | 'stale-key';
   bridges: BridgeSnap[];
 }
 
@@ -147,16 +198,15 @@ export function gateBlockEvidence(input: {
   const ownSid = open.filter((x) => x.sessionId !== null && x.sessionId === input.sid);
   const ownSidKeys = ownSid.map((x) => `${x.tenant ?? ''}|${x.env ?? ''}`);
   const matching = ownSid.find((x) => keyOf(x) === input.key);
-  let diagnosis: string;
+  let diagnosis: GateBlockEvidence['diagnosis'];
   if (keyLive) {
-    diagnosis = 'not-a-block: tab key is live among open bridges';
+    diagnosis = 'not-a-block';
   } else if (ownSid.length === 0) {
-    diagnosis =
-      'no-own-worker: no open bridge advertises this tab sid (a connected socket belongs to another tab/tenant)';
+    diagnosis = 'no-own-worker';
   } else if (ownSid.some((x) => (x.tenant && !x.env) || (!x.tenant && x.env))) {
-    diagnosis = 'asymmetric-frame: this tab worker advertised tenant XOR env (excluded from liveTenants)';
+    diagnosis = 'asymmetric-frame';
   } else {
-    diagnosis = 'stale-key: this tab worker advertises a different tenant|env than the tab (RC-1 surfacing as a block)';
+    diagnosis = 'stale-key';
   }
   return {
     tabId: input.tabId,
@@ -174,39 +224,6 @@ export function gateBlockEvidence(input: {
 }
 
 /** One hop in a captured redirect chain, annotated with the resolved session key. */
-export interface RedirectHop {
-  from: string;
-  to: string;
-  status: number;
-  /** `sessionKeyFromUrl(to)` — the tenant/env the hop lands on, or null. */
-  toKey: { tenant: string; env: 'production' | 'staging' } | null;
-}
-
-/**
- * Extract the redirect chain from captured CDP network events. Chrome signals a
- * redirect via `Network.requestWillBeSent` carrying a `redirectResponse` (the
- * 3xx that caused the new request); `from` = that response's URL, `to` = the new
- * request URL. Each hop's landing URL is annotated via the injected
- * `sessionKey` resolver (dependency-injected to keep this module pure).
- */
-export function extractRedirects(
-  events: Array<Record<string, unknown>>,
-  sessionKey: (url: string | undefined) => { tenant: string; env: 'production' | 'staging' } | null,
-): RedirectHop[] {
-  const hops: RedirectHop[] = [];
-  for (const e of events) {
-    if (e.method !== 'Network.requestWillBeSent') continue;
-    const rr = e.redirectResponse as { url?: string; status?: number } | undefined;
-    if (!rr) continue;
-    const from = rr.url;
-    const req = e.request as { url?: string } | undefined;
-    const to = req?.url ?? (e.documentURL as string | undefined);
-    if (!from || !to) continue;
-    hops.push({ from, to, status: rr.status ?? 0, toKey: sessionKey(to) });
-  }
-  return hops;
-}
-
 export interface ActivationGateSummary {
   gate: string;
   ms: number;

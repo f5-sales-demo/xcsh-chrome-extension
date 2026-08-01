@@ -11,9 +11,6 @@
 import type { ChatErrorReason } from './chat-protocol';
 import { type BridgeLike, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from './session-routing';
 
-/** Shown to the panel when a chat turn can't be routed to the tab's own worker. */
-export const NO_WORKER_FOR_TAB = 'No xcsh running for this tab — open the F5 console tab and ensure xcsh is running';
-
 export interface ChatRequestLike {
   id: string;
   tabId?: unknown;
@@ -22,10 +19,10 @@ export interface ChatRequestLike {
 
 export type ChatRoutePlan =
   | { kind: 'route'; id: string; port: number }
-  | { kind: 'error'; id: string; error: string; reason: ChatErrorReason };
+  | { kind: 'error'; id: string; reason: ChatErrorReason };
 
 /** Decide where a panel chat turn goes: the worker for the panel's OWN tab whose
- *  advertised tenant|env matches `sessionKey` (when supplied) and whose socket is
+ *  advertised tenant|env matches the required `sessionKey` and whose socket is
  *  open — else an error (never a global-active-port fallback). RC-1's SW-side
  *  guard: a stale-tenant worker lingering on the tab's sid is refused, not used. */
 export function planChatRequest(
@@ -33,13 +30,12 @@ export function planChatRequest(
   registry: Map<number, BridgeLike>,
   isOpen: (port: number) => boolean,
 ): ChatRoutePlan {
-  const target = resolveChatPort(
-    typeof msg.tabId === 'number' ? msg.tabId : undefined,
-    registry,
-    typeof msg.sessionKey === 'string' ? msg.sessionKey : undefined,
-  );
+  if (typeof msg.tabId !== 'number' || typeof msg.sessionKey !== 'string' || !msg.sessionKey) {
+    return { kind: 'error', id: msg.id, reason: 'no-worker' };
+  }
+  const target = resolveChatPort(msg.tabId, registry, msg.sessionKey);
   if (target === undefined || !isOpen(target)) {
-    return { kind: 'error', id: msg.id, error: NO_WORKER_FOR_TAB, reason: 'no-worker' };
+    return { kind: 'error', id: msg.id, reason: 'no-worker' };
   }
   return { kind: 'route', id: msg.id, port: target };
 }
@@ -67,11 +63,10 @@ export function planSkillsRequest(
   registry: Map<number, BridgeLike>,
   isOpen: (port: number) => boolean,
 ): SkillsRoutePlan {
-  const target = resolveChatPort(
-    typeof msg.tabId === 'number' ? msg.tabId : undefined,
-    registry,
-    typeof msg.sessionKey === 'string' ? msg.sessionKey : undefined,
-  );
+  if (typeof msg.tabId !== 'number' || typeof msg.sessionKey !== 'string' || !msg.sessionKey) {
+    return { kind: 'skip' };
+  }
+  const target = resolveChatPort(msg.tabId, registry, msg.sessionKey);
   if (target === undefined || !isOpen(target)) return { kind: 'skip' };
   return { kind: 'route', port: target };
 }
@@ -112,24 +107,24 @@ export type HelloAckPlan =
   | { kind: 'reject' }
   | { kind: 'accept'; tenant: string | null; env: string | null; sessionId: string; contextBound: boolean };
 
-/** Decide how to treat a hello_ack/tenant_changed: ignore a non-xcsh frame (no
- *  string sessionId), reject a major contract-version mismatch (SW closes +
- *  forgets the socket), else accept the identity fields (the SW adds port +
- *  lastSeen and stores the BridgeInfo). Kept pure — no Date.now() here. */
+/** Accept only a complete, version-compatible identity frame. */
 export function planHelloAck(msg: HelloAckLike, ownContractVersion: string): HelloAckPlan {
   if (typeof msg.sessionId !== 'string') return { kind: 'ignore' };
   if (
-    typeof msg.contractVersion === 'string' &&
+    typeof msg.contractVersion !== 'string' ||
     msg.contractVersion.split('.')[0] !== ownContractVersion.split('.')[0]
   ) {
     return { kind: 'reject' };
   }
+  if (typeof msg.contextBound !== 'boolean') return { kind: 'reject' };
+  if (msg.tenant !== null && typeof msg.tenant !== 'string') return { kind: 'reject' };
+  if (msg.env !== null && msg.env !== 'production' && msg.env !== 'staging') return { kind: 'reject' };
   return {
     kind: 'accept',
     tenant: (msg.tenant as string | null) ?? null,
     env: (msg.env as string | null) ?? null,
     sessionId: msg.sessionId,
-    contextBound: msg.contextBound === true, // additive optional field; anything non-true → false
+    contextBound: msg.contextBound,
   };
 }
 

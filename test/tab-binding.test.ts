@@ -122,8 +122,8 @@ describe('sessionKeyFromUrl', () => {
   // never activates against the wrong (or a shared) session. Staging and
   // production of the same tenant name stay DISTINCT keys.
   it('keys a staging tenant console by (tenant, staging)', () => {
-    expect(sessionKeyFromUrl('https://nferreira.staging.volterra.us/web/home')).toEqual({
-      tenant: 'nferreira',
+    expect(sessionKeyFromUrl('https://example-corp.staging.volterra.us/web/home')).toEqual({
+      tenant: 'example-corp',
       env: 'staging',
     });
   });
@@ -169,8 +169,8 @@ describe('sessionKeyStr', () => {
     expect(sessionKeyStr({ tenant: 'example-corp', env: 'production' })).toBe('example-corp|production');
   });
   it('round-trips from a URL', () => {
-    const key = sessionKeyFromUrl('https://nferreira.staging.volterra.us/web/home');
-    expect(key && sessionKeyStr(key)).toBe('nferreira|staging');
+    const key = sessionKeyFromUrl('https://example-corp.staging.volterra.us/web/home');
+    expect(key && sessionKeyStr(key)).toBe('example-corp|staging');
   });
 });
 

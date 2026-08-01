@@ -14,7 +14,7 @@ export function isConsoleUrl(url: string | undefined): boolean {
 const DNS_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 export interface SessionKey {
-  /** F5 XC tenant name, e.g. "nferreira". */
+  /** F5 XC tenant name, e.g. "example-corp". */
   tenant: string;
   /** Environment the tenant lives in. */
   env: 'production' | 'staging';
@@ -70,7 +70,7 @@ export function sessionKeyFromUrl(url: string | undefined): SessionKey | null {
   return null;
 }
 
-/** Stable string form of a session key, e.g. "nferreira|staging" — the key used
+/** Stable string form of a session key, e.g. "example-corp|staging" — the key used
  * to index per-tenant conversations and route per-tenant connections. */
 export function sessionKeyStr(key: SessionKey): string {
   return `${key.tenant}|${key.env}`;

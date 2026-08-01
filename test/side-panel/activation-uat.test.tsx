@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import { cleanup, fireEvent, render } from '@testing-library/preact';
 import { App } from '../../src/side-panel/App';
 
-const F5_TAB = { id: 7, url: 'https://f5-amer-ent.console.ves.volterra.io/web/home' };
-const F5_KEY = 'f5-amer-ent|production';
+const F5_TAB = { id: 7, url: 'https://example-corp.console.ves.volterra.io/web/home' };
+const F5_KEY = 'example-corp|production';
 
 function mount(activeTab: { id: number; url: string }) {
   const posted: Record<string, unknown>[] = [];
