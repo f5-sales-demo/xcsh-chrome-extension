@@ -39,28 +39,30 @@ describe('resolveToolTab', () => {
 });
 describe('resolveChatPort', () => {
   const reg = new Map([
-    [19222, { sessionId: 'tab-1' }],
-    [19223, { sessionId: 'tab-2' }],
+    [19222, { sessionId: 'tab-1', tenant: 'example-alpha', env: 'staging' }],
+    [19223, { sessionId: 'tab-2', tenant: 'example-beta', env: 'production' }],
   ]);
   test("routes a chat turn to the worker for the panel's OWN tab", () => {
-    expect(resolveChatPort(1, reg)).toBe(19222);
-    expect(resolveChatPort(2, reg)).toBe(19223);
+    expect(resolveChatPort(1, reg, 'example-alpha|staging')).toBe(19222);
+    expect(resolveChatPort(2, reg, 'example-beta|production')).toBe(19223);
   });
   test('undefined for an unbound tab or missing tabId (caller refuses; never a global activePort fallback)', () => {
-    expect(resolveChatPort(9, reg)).toBeUndefined();
-    expect(resolveChatPort(undefined, reg)).toBeUndefined();
+    expect(resolveChatPort(9, reg, 'example-alpha|staging')).toBeUndefined();
+    expect(resolveChatPort(undefined, reg, 'example-alpha|staging')).toBeUndefined();
   });
 });
 describe('late-bind adoption (pre-warm pool)', () => {
   test("routing follows a port re-identified from 'spare' to 'tab-<id>'", () => {
-    const reg = new Map<number, { sessionId: string }>([[19222, { sessionId: 'spare' }]]);
+    const reg = new Map<number, { sessionId: string; tenant: string | null; env: string | null }>([
+      [19222, { sessionId: 'spare', tenant: null, env: null }],
+    ]);
     // A warm spare (sessionId 'spare') is bound to no tab.
     expect(portForTab(reg, sidForTab(7))).toBeUndefined();
     // Adoption: the worker late-binds and its tenant_changed updates the registry sessionId.
-    reg.set(19222, { sessionId: 'tab-7' });
+    reg.set(19222, { sessionId: 'tab-7', tenant: 'example-corp', env: 'production' });
     // Now chat/tool routing resolves the same port for tab 7.
     expect(portForTab(reg, sidForTab(7))).toBe(19222);
-    expect(resolveChatPort(7, reg)).toBe(19222);
+    expect(resolveChatPort(7, reg, 'example-corp|production')).toBe(19222);
   });
 });
 
@@ -73,38 +75,33 @@ describe('late-bind adoption (pre-warm pool)', () => {
 describe('resolveChatPort tenant guard (RC-1)', () => {
   test('refuses a stale-tenant worker on the tab sid; routes only to the matching-tenant worker', () => {
     // Only worker for tab-1 still advertises the OLD tenant (example-corp|staging) —
-    // its socket has not closed yet after the tab moved to example-id-003.
+    // its socket has not closed yet after the tab moved to example-beta|production.
     const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
       [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
     ]);
     // Guarded routing for the tab's CURRENT key refuses the stale worker.
-    expect(resolveChatPort(1, reg, 'example-id-003')).toBeUndefined();
+    expect(resolveChatPort(1, reg, 'example-beta|production')).toBeUndefined();
     // The fresh worker for the new tenant registers (same sid, new tenant|env).
-    reg.set(19223, { sessionId: 'tab-1', tenant: 'example-id-009', env: 'production' });
+    reg.set(19223, { sessionId: 'tab-1', tenant: 'example-beta', env: 'production' });
     // Now the turn routes to the NEW-tenant worker, never the lingering old one.
-    expect(resolveChatPort(1, reg, 'example-id-003')).toBe(19223);
+    expect(resolveChatPort(1, reg, 'example-beta|production')).toBe(19223);
   });
 
   test('a race with two ports on the same sid picks the port whose tenant matches', () => {
     // Old worker (19222) and new worker (19223) both transiently advertise tab-1.
     const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
       [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
-      [19223, { sessionId: 'tab-1', tenant: 'example-id-009', env: 'production' }],
+      [19223, { sessionId: 'tab-1', tenant: 'example-beta', env: 'production' }],
     ]);
-    expect(resolveChatPort(1, reg, 'example-id-003')).toBe(19223);
+    expect(resolveChatPort(1, reg, 'example-beta|production')).toBe(19223);
     expect(resolveChatPort(1, reg, 'example-corp|staging')).toBe(19222);
   });
 
   test('a worker advertising tenant but null env never matches a full key', () => {
     const reg = new Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>([
-      [19222, { sessionId: 'tab-1', tenant: 'example-id-009', env: null }],
+      [19222, { sessionId: 'tab-1', tenant: 'example-beta', env: null }],
     ]);
-    expect(resolveChatPort(1, reg, 'example-id-003')).toBeUndefined();
-  });
-
-  test('omitting expectedKey preserves the legacy sid-only match (back-compat)', () => {
-    const reg = new Map([[19222, { sessionId: 'tab-1' }]]);
-    expect(resolveChatPort(1, reg)).toBe(19222);
+    expect(resolveChatPort(1, reg, 'example-beta|production')).toBeUndefined();
   });
 });
 
@@ -117,11 +114,11 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
   type R = Map<number, { sessionId: string | null; tenant: string | null; env: string | null }>;
   test('flags a worker on the tab sid whose tenant differs from the current key', () => {
     const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
-    expect(staleTabPorts(reg, 1, 'example-id-003')).toEqual([19222]);
+    expect(staleTabPorts(reg, 1, 'example-beta|production')).toEqual([19222]);
   });
   test('keeps a worker whose tenant matches the current key', () => {
-    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-id-009', env: 'production' }]]);
-    expect(staleTabPorts(reg, 1, 'example-id-003')).toEqual([]);
+    const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-beta', env: 'production' }]]);
+    expect(staleTabPorts(reg, 1, 'example-beta|production')).toEqual([]);
   });
   test('flags the worker when the tab navigated off-console (null current key)', () => {
     const reg: R = new Map([[19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }]]);
@@ -129,14 +126,14 @@ describe('staleTabPorts (RC-1 re-tenant detection)', () => {
   });
   test('returns nothing when the tab has no worker, and ignores example-id-007 tabs', () => {
     const reg: R = new Map([[19223, { sessionId: 'tab-2', tenant: 'example-corp', env: 'staging' }]]);
-    expect(staleTabPorts(reg, 1, 'example-id-003')).toEqual([]);
+    expect(staleTabPorts(reg, 1, 'example-beta|production')).toEqual([]);
   });
   test('in an old+new race, flags only the stale (old-tenant) port', () => {
     const reg: R = new Map([
       [19222, { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging' }],
-      [19223, { sessionId: 'tab-1', tenant: 'example-id-009', env: 'production' }],
+      [19223, { sessionId: 'tab-1', tenant: 'example-beta', env: 'production' }],
     ]);
-    expect(staleTabPorts(reg, 1, 'example-id-003')).toEqual([19222]);
+    expect(staleTabPorts(reg, 1, 'example-beta|production')).toEqual([19222]);
   });
 });
 
@@ -161,17 +158,12 @@ describe('same-tenant multi-tab isolation (B/C)', () => {
 
 // RC-2 (issue #166): the page-context snapshot attached to a chat turn must be
 // built for the PANEL'S active tab (the transcript's tab), not the global
-// controlled/automation tab — otherwise the context comes from the wrong tab
-// when the two differ. The panel sends its bound tab; the controlled tab is only
-// a legacy fallback when the panel supplied none.
+// controlled/automation tab — otherwise the context comes from the wrong tab.
 describe('contextTabFor (RC-2)', () => {
-  test("prefers the panel's requested tab over the controlled tab", () => {
-    expect(contextTabFor(5, 9)).toBe(5);
+  test("accepts the panel's requested tab", () => {
+    expect(contextTabFor(5)).toBe(5);
   });
-  test('falls back to the controlled tab only when the panel sent none', () => {
-    expect(contextTabFor(undefined, 9)).toBe(9);
-  });
-  test('undefined when neither is available', () => {
-    expect(contextTabFor(undefined, undefined)).toBeUndefined();
+  test('undefined when the panel supplied no tab', () => {
+    expect(contextTabFor(undefined)).toBeUndefined();
   });
 });

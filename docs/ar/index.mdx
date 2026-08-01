@@ -16,7 +16,7 @@ The **xcsh Chrome Extension** is a purpose-built Manifest V3 extension that lets
 
 The extension connects to the xcsh CLI through a local native-messaging bridge and exposes a surface of browser-automation tools scoped exclusively to the F5 XC console:
 
-- **Native F5 XC login** — drives the full OIDC/Keycloak flow with session-expiry auto-recovery and required-action discrimination
+- **Session-safe navigation** — drives scoped console tabs after you authenticate directly in Chrome
 - **Accessibility-tree navigation** — reads the console's structure via role/name/text selectors
 - **Form automation** — fills fields with Angular model commitment (handles the XC console's `vsui-input` framework)
 - **Deterministic interaction** — clicks, selects, scrolls, and types via the Chrome DevTools Protocol
@@ -28,7 +28,9 @@ xcsh (the CLI AI assistant) connects to this extension over a local native-messa
 
 ## Privacy
 
-- Credentials are held **in-memory only** — never persisted by the extension
+- The extension never accepts or stores login credentials; you authenticate directly in Chrome
+- Chat content and tenant routing stay in memory for the active side-panel lifetime
+- Persisted diagnostics contain metrics only, never tenant/session values or page URLs
 - All communication is **local** (native-messaging bridge to the xcsh CLI)
 - **No data** is sent to external servers
 - Enterprise managed policy support (`allowedDomains`, `blockedUrlPatterns`) via Chrome Enterprise

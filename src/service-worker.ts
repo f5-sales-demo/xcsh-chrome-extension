@@ -20,19 +20,23 @@ import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './ca
 import type { ChatErrorReason } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import {
+  DIAG_STORAGE_KEYS,
   type DiagEvent,
-  extractRedirects,
   gateBlockEvidence,
   isNoiseKind,
+  publicBridgeDiagnostics,
   pushCapped,
+  safeDiagnosticDetail,
   summarizeActivations,
   summarizeSuspension,
   summarizeTtft,
   summarizeTurns,
 } from './diagnostics';
 import { runDispatch } from './dispatch';
+import { publicRuntimeError } from './runtime-errors';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
 import { SkillsWaiters } from './skills-waiters';
+import { obsoleteLocalStorageKeys } from './storage-hygiene';
 import {
   planChatRequest,
   planHelloAck,
@@ -120,17 +124,6 @@ const SCOPED_QUERY_PATTERNS = ['https://*.volterra.us/*', 'https://*.console.ves
 
 function isScopedUrl(url: string): boolean {
   return /^https:\/\/[^/]*\.volterra\.us\//.test(url) || /^https:\/\/[^/]*\.console\.ves\.volterra\.io\//.test(url);
-}
-
-/** Hostname-anchored Keycloak login URL check. */
-const KC_LOGIN_HOST = /(?:^|\.)volterra\.us$|(?:^|\.)console\.ves\.volterra\.io$/;
-function isKeycloakLoginUrl(u: string): boolean {
-  try {
-    const { hostname, pathname } = new URL(u);
-    return KC_LOGIN_HOST.test(hostname) && /\/auth\/realms\/|\/login-actions\//.test(pathname);
-  } catch {
-    return false;
-  }
 }
 
 // --- WebSocket bridge connection + lifecycle -------------------------------
@@ -257,23 +250,6 @@ function anyOpen(): boolean {
 // The console tab the SW is currently driving (set in `navigate`).
 let targetTabId: number | undefined;
 // Phase 1: identity of the xcsh process this SW is connected to (from hello_ack).
-let sessionTenant: string | null = null;
-let sessionEnv: string | null = null;
-let sessionId: string | null = null;
-// Whether the connected xcsh worker has an active stored context (from hello_ack).
-// Contextless (false) means API-backed features are unavailable → panel shows a hint.
-let sessionContextBound = false;
-
-// Cached login credentials for session-expiry auto-recovery. Set by login(),
-// used by navigate() to transparently re-authenticate when the session expires.
-// In-memory only — never persisted.
-let lastLoginCredentials: { email: string; password: string; consoleUrl: string } | null = null;
-// True while login() is driving its initial navigate(). navigate()'s
-// session-expiry auto-recovery must skip re-invoking login() during this window,
-// else login()→navigate()→recovery→login()→… recurses infinitely, issuing a
-// fresh OIDC request (new state/nonce) every cycle and never settling.
-let loginInProgress = false;
-
 // Tabs we have attached the debugger to, so we can detach on cleanup and avoid
 // re-attaching needlessly.
 const attachedTabs = new Set<number>();
@@ -299,18 +275,20 @@ let observingConsole = false;
 let observingNetwork = false;
 
 // --- Phase 0a: SW-lifecycle diagnostics ------------------------------------
-// A capped ring buffer of lifecycle events, persisted to chrome.storage.local so
-// it SURVIVES service-worker restarts — the whole point is to measure MV3
-// suspension (gaps between keepalive ticks) and binds missed while suspended.
+// A capped ring buffer of metric-only lifecycle events, persisted to
+// chrome.storage.local so it survives service-worker restarts. Identity-bearing
+// values and page URLs are discarded by safeDiagnosticDetail before storage.
 const DIAG_CAP = 400;
 const NOISE_CAP = 60;
-const DIAG_KEY = 'xcsh.diag.suspension';
-const DIAG_NOISE_KEY = 'xcsh.diag.noise';
+const TRANSIENT_DIAG_CAP = 400;
+const [DIAG_KEY, DIAG_NOISE_KEY] = DIAG_STORAGE_KEYS;
 let diagBuffer: DiagEvent[] = [];
 let diagNoise: DiagEvent[] = [];
+const activationBuffer: DiagEvent[] = [];
+const spanBuffer: DiagEvent[] = [];
 let diagFlushTimer: ReturnType<typeof setTimeout> | null = null;
 function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
-  const rec = { t: Date.now(), event, ...detail };
+  const rec = { t: Date.now(), event, ...safeDiagnosticDetail(detail) };
   if (isNoiseKind(event)) pushCapped(diagNoise, rec, NOISE_CAP);
   else pushCapped(diagBuffer, rec, DIAG_CAP);
   if (diagFlushTimer) return; // debounce persistence (~1s) to avoid storage churn
@@ -319,29 +297,40 @@ function recordDiag(event: string, detail: Record<string, unknown> = {}): void {
     chrome.storage.local.set({ [DIAG_KEY]: diagBuffer, [DIAG_NOISE_KEY]: diagNoise }).catch(() => {});
   }, 1000);
 }
-// TTFT (#170): emit one uniform `span` telemetry event. summarizeTtft joins these
-// into the init→first-token timeline; `id` links a chat turn, `sid` links a
-// session's cold-start segment, `cold` (carried by send_to_route) gates whether
-// the per-sid cold-start spans attach to the turn.
+// TTFT correlation needs turn and worker identifiers, so span events are kept
+// only in memory and are never added to the persisted diagnostics buffers.
 function recordSpan(
   stage: string,
   ms: number,
   extra: { id?: string; sid?: string; cold?: boolean; proc?: 'ext' | 'xcsh' } = {},
 ): void {
-  recordDiag('span', {
-    proc: extra.proc ?? 'ext',
-    stage,
-    ms,
-    ...(extra.id ? { id: extra.id } : {}),
-    ...(extra.sid ? { sid: extra.sid } : {}),
-    ...(extra.cold !== undefined ? { cold: extra.cold } : {}),
-  });
+  pushCapped(
+    spanBuffer,
+    {
+      t: Date.now(),
+      event: 'span',
+      proc: extra.proc ?? 'ext',
+      stage,
+      ms,
+      ...(extra.id ? { id: extra.id } : {}),
+      ...(extra.sid ? { sid: extra.sid } : {}),
+      ...(extra.cold !== undefined ? { cold: extra.cold } : {}),
+    },
+    TRANSIENT_DIAG_CAP,
+  );
 }
 // Per-tab cold-start provision tracking (provision→register duration + cold flag),
 // reaped on tab close. See ttft-provision.ts for the pure state machine.
 const prov = newProvisionState();
-// Load persisted history on (re)start, then stamp this SW start — the gap
-// between the previous last event and this sw_start reveals the suspension window.
+// Delete former chat and identity-capable diagnostic storage as a clean break;
+// values are never read or migrated. Load only the new metric-only history.
+chrome.storage.local
+  .get(null)
+  .then((stored) => {
+    const obsolete = obsoleteLocalStorageKeys(Object.keys(stored));
+    if (obsolete.length) return chrome.storage.local.remove(obsolete);
+  })
+  .catch(() => {});
 chrome.storage.local
   .get([DIAG_KEY, DIAG_NOISE_KEY])
   .then((r) => {
@@ -426,10 +415,10 @@ function pushStatus(connected: boolean, reason?: string): void {
 
 /** Fail every active chat turn loudly when the bridge link drops, tagging the
  * machine-readable cause so the panel renders a distinct, recoverable message. */
-function failActiveTurns(error: string, reason?: ChatErrorReason): void {
+function failActiveTurns(reason: ChatErrorReason): void {
   for (const [id, port] of [...turnToPort.entries()]) {
     try {
-      port.postMessage({ type: 'chat_error', id, error, ...(reason ? { reason } : {}) });
+      port.postMessage({ type: 'chat_error', id, reason });
     } catch {
       /* ignore */
     }
@@ -444,7 +433,7 @@ function startHeartbeat(): void {
     if (!anyOpen()) return;
     if (isLinkStale(lastActivityTs, Date.now(), LINK_STALE_MS)) {
       pushStatus(false, 'stale');
-      failActiveTurns('bridge unresponsive', 'bridge-unresponsive');
+      failActiveTurns('bridge-unresponsive');
       for (const s of sockets.values()) {
         try {
           s.close();
@@ -642,16 +631,14 @@ function ensureTenantSocket(sessionKey: string | null): void {
  * an in-flight turn keeps routing to the socket it started on (Phase-3 pinning).
  * Per-tab: provisioning and activePort are keyed by the tab's sid, not the
  * tenant, so two tabs of the same tenant each get their own worker. */
-function setActiveTenant(sessionKey: string | null, tabId?: number): void {
+function setActiveTenant(sessionKey: string | null, tabId: number): void {
   if (isInFlight() || turnToPort.size > 0) return; // a turn owns routing
   ensureTenantSocket(sessionKey);
-  // The active socket is the focused tab's OWN worker (fall back to the tenant
-  // lookup only when no tab id is available, e.g. legacy callers).
-  activePort = tabId !== undefined ? portForTab(registry, sidForTab(tabId)) : portForTenant(registry, sessionKey);
+  // The active socket is the focused tab's own worker.
+  activePort = portForTab(registry, sidForTab(tabId));
   // No worker for the focused tab → ask the manager to spawn one keyed by the
   // tab's sid; the scan discovers its port and routes.
   if (
-    tabId !== undefined &&
     sessionKey !== null &&
     sessionKey !== '' &&
     !manualPortPinned &&
@@ -703,7 +690,7 @@ function connectPort(port: number): void {
       // each close saturated the diag ring buffer and evicted the useful events (#182).
       if (opened) recordDiag('ws_close', { port });
       pushStatus(anyOpen(), anyOpen() ? undefined : 'closed');
-      if (!anyOpen()) failActiveTurns('bridge disconnected', 'bridge-disconnected');
+      if (!anyOpen()) failActiveTurns('bridge-disconnected');
       broadcastBridges();
       // The pinned port always keeps retrying. Otherwise: if this attempt never
       // opened, the port is dead/gone — forget it (stops the storm; the 30s scan
@@ -791,19 +778,7 @@ function onMessage(msg: any, sourcePort: number): void {
       // so tool_request from this port dispatches to that worker's OWN tab.
       correlatePortToTab(sourcePort, info.sessionId);
       knownPorts.add(sourcePort); // a real bridge answered here — eligible for fast-reconnect
-      // Legacy single-session mirror (still used by the connection-dot tooltip).
-      sessionTenant = info.tenant;
-      sessionEnv = info.env;
-      sessionId = info.sessionId;
-      sessionContextBound = info.contextBound;
       if (activePort === undefined && sockets.get(sourcePort)?.readyState === WebSocket.OPEN) activePort = sourcePort;
-      broadcastToChatPanels({
-        type: 'session_info',
-        tenant: sessionTenant,
-        env: sessionEnv,
-        sessionId,
-        contextBound: sessionContextBound,
-      });
       broadcastBridges();
     },
 
@@ -820,7 +795,7 @@ function onMessage(msg: any, sourcePort: number): void {
       Promise.resolve()
         .then(() => runTool(tool, params, plan.tabId))
         .then((content) => sendTo(sourcePort, { type: 'tool_result', id, content, is_error: false }))
-        .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: String(e), is_error: true }));
+        .catch((e) => sendTo(sourcePort, { type: 'tool_result', id, content: publicRuntimeError(e), is_error: true }));
     },
 
     onSkills: (frame) => {
@@ -841,7 +816,7 @@ function onMessage(msg: any, sourcePort: number): void {
       // the start time so later deltas don't re-record.
       const routedAt = turnRoutedAt.get(frame.id);
       if (routedAt !== undefined) {
-        recordDiag('chat_reply', { id: frame.id, ms: Date.now() - routedAt });
+        recordDiag('chat_reply', { ms: Date.now() - routedAt });
         recordSpan('route_first_token', Date.now() - routedAt, { id: frame.id }); // TTFT (#170): route→first-token envelope
         turnRoutedAt.delete(frame.id);
       }
@@ -970,10 +945,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
     sendResponse({
-      bridges: [...registry.values()].map(({ sessionId, ...rest }) => ({
-        ...rest,
-        sessionId: sessionId ? sessionId.slice(-6) : null,
-      })),
+      bridges: publicBridgeDiagnostics([...registry.values()]),
     });
     return; // synchronous response
   }
@@ -1034,24 +1006,21 @@ chrome.runtime.onConnect.addListener((port) => {
       // the worker must advertise that exact key, so a turn after a same-tab re-login
       // can never resolve the OLD-tenant worker still lingering on this tab's sid (#166).
       const plan = planChatRequest(m, registry, (p) => sockets.get(p)?.readyState === WebSocket.OPEN);
-      const diagTab = typeof m.tabId === 'number' ? m.tabId : null;
       if (plan.kind === 'error') {
-        recordDiag('chat_route', { id: plan.id, tabId: diagTab, error: true });
-        port.postMessage({ type: 'chat_error', id: plan.id, error: plan.error, reason: plan.reason });
+        recordDiag('chat_route', { error: true });
+        port.postMessage({ type: 'chat_error', id: plan.id, reason: plan.reason });
         return;
       }
       turnToPort.set(plan.id, port);
       turnToBridgePort.set(plan.id, plan.port); // pin this turn to its origin socket
       turnRoutedAt.set(plan.id, Date.now());
-      recordDiag('chat_route', { id: plan.id, tabId: diagTab, port: plan.port });
+      recordDiag('chat_route', { port: plan.port });
       // TTFT (#170): the id↔sid link span. Carries the cold flag so summarizeTtft
       // attaches this session's cold-start spans (provision_to_worker/gates) only to
       // the FIRST turn after a fresh worker; the flag is consumed once here.
-      if (diagTab !== null) {
-        const routeSid = sidForTab(diagTab);
-        const cold = consumeColdOnRoute(prov, routeSid);
-        recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
-      }
+      const routeSid = sidForTab(m.tabId as number);
+      const cold = consumeColdOnRoute(prov, routeSid);
+      recordSpan('send_to_route', 0, { id: plan.id, sid: routeSid, cold });
       sendTo(plan.port, m);
       return;
     }
@@ -1064,20 +1033,23 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (m.type === 'get_page_context') {
       // Build context for the PANEL'S tab (m.tabId), not the global controlled
-      // tab — otherwise a turn's attached context comes from the automation tab
-      // when it differs from the focused tab. targetTabId is only a fallback for
-      // a caller that sent no tabId. (RC-2, #166)
-      const ctxTab = contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId);
+      // tab — otherwise a turn's attached context could come from the automation
+      // tab when it differs from the focused tab. (RC-2, #166)
+      const ctxTab = contextTabFor(m.tabId);
+      if (ctxTab === undefined) {
+        port.postMessage({ type: 'page_context_error', error: 'missing tab binding', reqId: m.reqId });
+        return;
+      }
       const reqId = m.reqId; // activation-run correlation token (echoed back verbatim)
       buildPageContext(ctxTab)
         .then((snapshot) => port.postMessage({ type: 'page_context', snapshot, reqId }))
-        .catch((e) => port.postMessage({ type: 'page_context_error', error: String(e), reqId }));
+        .catch((e) => port.postMessage({ type: 'page_context_error', error: publicRuntimeError(e), reqId }));
       return;
     }
     if (m.type === 'chat_annotate') {
-      // Annotate the PANEL'S tab when supplied (parity with get_page_context);
-      // targetTabId only as a fallback. (RC-2, #166)
-      chatAnnotate(m, contextTabFor(typeof m.tabId === 'number' ? m.tabId : undefined, targetTabId)).catch(() => {});
+      // Annotate only the panel's explicitly bound tab. (RC-2, #166)
+      const annotateTab = contextTabFor(m.tabId);
+      if (annotateTab !== undefined) chatAnnotate(m, annotateTab).catch(() => {});
       return;
     }
     if (m.type === 'status_request') {
@@ -1085,17 +1057,23 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (m.type === 'activation_timing') {
-      // Per-gate readiness timing from the panel → durable diag ring buffer,
-      // grouped per run and surfaced by diag_activation. Store fields verbatim.
-      recordDiag('activation', {
-        runId: m.runId,
-        gate: m.gate,
-        ms: m.ms,
-        cold: m.cold,
-        phase: m.phase,
-        outcome: m.outcome,
-        ...(typeof m.total === 'number' ? { total: m.total } : {}),
-      });
+      // Run correlation is useful for the live diagnostic tool but is a session
+      // identifier, so activation records remain process-local.
+      pushCapped(
+        activationBuffer,
+        {
+          t: Date.now(),
+          event: 'activation',
+          runId: m.runId,
+          gate: m.gate,
+          ms: m.ms,
+          cold: m.cold,
+          phase: m.phase,
+          outcome: m.outcome,
+          ...(typeof m.total === 'number' ? { total: m.total } : {}),
+        },
+        TRANSIENT_DIAG_CAP,
+      );
       // TTFT (#170): the page gate's `total` is the full cold-start activation cost
       // for this run. Emit it as a per-sid cold-start span keyed to the panel's
       // bound tab (m.tabId), so summarizeTtft can attach it to that tab's cold turn.
@@ -1161,15 +1139,6 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   // Greet with current connection status so the panel can render its dot.
   port.postMessage({ type: 'status', connected: anyOpen() });
-  // Also replay the current session identity (from the last hello_ack) so a panel
-  // that connected AFTER the handshake still learns which tenant xcsh serves.
-  port.postMessage({
-    type: 'session_info',
-    tenant: sessionTenant,
-    env: sessionEnv,
-    sessionId,
-    contextBound: sessionContextBound,
-  });
   port.postMessage({ type: 'bridges', tenants: liveTenants(registry) });
   // Proactively bind the active console tab when the panel opens (idle only).
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
@@ -1279,7 +1248,6 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
     return evalInPage(t, '({ts:Date.now(),title:document.title,xcsh:typeof __xcshReadAx})');
   },
   navigate,
-  login,
   select_option: selectOption,
   scroll_to: scrollTo,
   get_page_text: getPageText,
@@ -1293,14 +1261,8 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
   diag_suspension: diagSuspension,
   diag_activation: diagActivation,
   diag_ttft: diagTtft,
-  // Read-only diagnostics for the agent — expose only a short sessionId suffix,
-  // never the full process id (tenant-isolation hardening).
-  diag_bridges: () =>
-    [...registry.values()].map(({ sessionId, ...rest }) => ({
-      ...rest,
-      sessionId: sessionId ? sessionId.slice(-6) : null,
-    })),
-  capture_login_flow: captureLoginFlow,
+  // Read-only bridge health without tenant, environment, or session values.
+  diag_bridges: () => publicBridgeDiagnostics([...registry.values()]),
   wait_for_api_response: waitForApiResponse,
   file_upload: fileUpload,
   browser_batch: browserBatch,
@@ -1320,9 +1282,8 @@ const TOOL_HANDLERS: Record<string, (params: any, tabId?: number) => unknown | P
   detach,
   set_explain_mode: setExplainMode,
   annotate,
-  // Chat-flow parity (~810): no controlled tab → buildPageContext returns null
-  // (panel shows inactive) rather than throwing. Pass the raw param through.
-  get_page_context: (_params: unknown, tabId?: number) => buildPageContext(tabId),
+  // Tool requests must carry the worker's explicitly bound tab.
+  get_page_context: (_params: unknown, tabId?: number) => buildPageContext(requireTab(tabId)),
 };
 
 // Fail fast (at SW load) if the dispatch map and the published contract diverge —
@@ -1367,9 +1328,8 @@ async function navigate(params: { url: string }, boundTabId?: number): Promise<{
   // another console tab (that would let a worker drive a tab it isn't bound to).
   // Repeatedly creating fresh tabs also churns the OIDC session (causing "Invalid
   // CSRF token") and forces a new chrome.debugger attach each time. A new tab is
-  // created ONLY when the bound tab is gone. Falls back to the global targetTabId
-  // solely for legacy callers (login's initial navigate) that pass no bound tab.
-  const reuseCandidate = boundTabId ?? targetTabId;
+  // created ONLY when the bound tab is gone.
+  const reuseCandidate = boundTabId;
   let reuseId: number | undefined;
   if (reuseCandidate !== undefined) {
     try {
@@ -1433,25 +1393,6 @@ async function navigate(params: { url: string }, boundTabId?: number): Promise<{
   // to settle so read_ax/find see the real content, not the loading shell.
   await waitForSettle(tabId);
 
-  // Session-expiry auto-recovery
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.url && isKeycloakLoginUrl(tab.url) && lastLoginCredentials && !loginInProgress) {
-      await login(lastLoginCredentials, tabId);
-      await neutralizeBeforeunload(tabId);
-      try {
-        await ensureDebuggerAttached(tabId);
-        await chrome.debugger.sendCommand({ tabId }, 'Page.navigate', { url });
-      } catch {
-        await chrome.tabs.update(tabId, { url, active: true });
-      }
-      await waitForNavigation(tabId);
-      await waitForSettle(tabId);
-    }
-  } catch {
-    /* best-effort recovery */
-  }
-
   return { tabId };
 }
 
@@ -1507,205 +1448,6 @@ async function waitForSettle(tabId: number, timeoutMs = 15_000): Promise<void> {
     last = count;
     await new Promise((r) => setTimeout(r, 500));
   }
-}
-
-/**
- * Native F5 XC login — drives the OIDC/Keycloak flow end-to-end.
- *
- * The XC console is OIDC-protected: visiting it 302-redirects to a Keycloak
- * realm login page, the user authenticates, Keycloak 302-redirects back with an
- * authorization code, and the console exchanges it for a session. This tool
- * navigates to the console, fills + submits the Keycloak form, handles the
- * optional `login-actions/required-action` interstitial, and waits until the
- * browser is back on a console (non-login) URL. Each stage is recorded in
- * `steps` so the AI engine (xcsh) has a systematic map of the redirect flow.
- *
- * Credentials are used in-memory only (passed per call from xcsh); they are
- * never persisted by the extension.
- */
-async function login(
-  params: {
-    email: string;
-    password: string;
-    consoleUrl: string;
-  },
-  boundTabId?: number,
-): Promise<{ loggedIn: boolean; finalUrl: string; steps: string[] }> {
-  // biome-ignore lint/suspicious/noExplicitAny: Chrome extension API typings
-  const { email, password, consoleUrl } = params ?? ({} as any);
-  if (!email || !password || !consoleUrl) {
-    throw new Error('login: email, password, and consoleUrl are required');
-  }
-  // Cache creds for session-expiry auto-recovery (in-memory only, never persisted).
-  lastLoginCredentials = { email, password, consoleUrl };
-  // Only the console domain is a valid login target — reject anything else so
-  // credentials can never be navigated to / injected into a foreign host.
-  try {
-    const parsed = new URL(consoleUrl);
-    if (parsed.protocol !== 'https:' || !isScopedUrl(consoleUrl)) {
-      throw new Error('not a console URL');
-    }
-  } catch {
-    throw new Error(`login: consoleUrl is not a valid F5 XC console URL: ${consoleUrl}`);
-  }
-
-  const steps: string[] = [];
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // Use the module-scoped Keycloak login URL check (hostname-anchored) so
-  // credentials are only ever injected into the genuine Keycloak/console
-  // domains, never a foreign host that merely contains "/auth/realms/".
-  const isLoginUrl = isKeycloakLoginUrl;
-
-  // 1) Navigate to the console — 302s to Keycloak (or loads if already authed).
-  //    Guard navigate()'s auto-recovery from re-entering login() (infinite
-  //    login→navigate→recovery→login recursion) while this initial navigate runs.
-  loginInProgress = true;
-  let tabId: number;
-  try {
-    ({ tabId } = await navigate({ url: consoleUrl }, boundTabId));
-  } finally {
-    loginInProgress = false;
-  }
-  steps.push(`navigate → ${consoleUrl}`);
-
-  // 2) Detect whether we're on the Keycloak login form or already on the console.
-  const detectDeadline = Date.now() + 30_000;
-  let onLoginForm = false;
-  while (Date.now() < detectDeadline) {
-    const tab = await chrome.tabs.get(tabId);
-    const url = tab.url ?? '';
-    if (isLoginUrl(url)) {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => ({
-          form: !!document.querySelector('#username, #password'),
-          invalid: /invalid username or password/i.test(document.body?.innerText ?? ''),
-          href: location.href,
-        }),
-      });
-      const res = r?.result as { form?: boolean; invalid?: boolean } | undefined;
-      if (res?.form) {
-        steps.push(`302 → Keycloak login page (${new URL(url).hostname})`);
-        onLoginForm = true;
-        break;
-      }
-    } else if (isScopedUrl(url) && !url.includes('code=') && !url.includes('state=')) {
-      // Scoped URL without OIDC callback params → genuinely authenticated.
-      // (If ?code=&state= are present, the OIDC exchange is still in-flight.)
-      steps.push('already authenticated — console loaded');
-      await waitForSettle(tabId);
-      return { loggedIn: true, finalUrl: (await chrome.tabs.get(tabId)).url ?? url, steps };
-    }
-    await sleep(800);
-  }
-  if (!onLoginForm) {
-    throw new Error('login: Keycloak login form did not appear within 30s');
-  }
-
-  // 3) Fill + submit the Keycloak credentials form.
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (em: string, pw: string) => {
-      const u = document.querySelector("#username, input[name='username']") as HTMLInputElement | null;
-      const p = document.querySelector("#password, input[name='password']") as HTMLInputElement | null;
-      if (u) {
-        u.value = em;
-        u.dispatchEvent(new Event('input', { bubbles: true }));
-        u.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      if (p) {
-        p.value = pw;
-        p.dispatchEvent(new Event('input', { bubbles: true }));
-        p.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-      const btn = document.querySelector(
-        "#kc-login, button[type='submit'], input[type='submit']",
-      ) as HTMLElement | null;
-      btn?.click();
-    },
-    args: [email, password],
-  });
-  steps.push('submitted credentials → #kc-login');
-
-  // 4) Wait for the redirect back to the console, handling the required-action
-  //    interstitial (e.g. UPDATE_PROFILE) and detecting invalid credentials.
-  const authDeadline = Date.now() + 40_000;
-  while (Date.now() < authDeadline) {
-    await sleep(1000);
-    const tab = await chrome.tabs.get(tabId);
-    const url = tab.url ?? '';
-
-    if (isScopedUrl(url) && !isLoginUrl(url)) {
-      steps.push(`302 → console (${new URL(url).hostname}) — authenticated`);
-      await recoverFromCsrf(tabId); // /web can land on an Invalid CSRF token page
-      await waitForSettle(tabId); // let the console SPA render before returning
-      return { loggedIn: true, finalUrl: (await chrome.tabs.get(tabId)).url ?? url, steps };
-    }
-
-    // Still on a Keycloak page — check for an error or a required-action form.
-    if (isLoginUrl(url)) {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          const invalid = /invalid username or password|account is disabled/i.test(document.body?.innerText ?? '');
-          if (invalid) return 'invalid';
-          // Required-action discrimination: read the execution= type and handle
-          // each differently. Safe actions auto-submit; dangerous ones throw clear errors.
-          const isInterstitial = /required-action|login-actions\/(authenticate|action-token)/.test(location.pathname);
-          if (!isInterstitial) return 'waiting';
-
-          // Detect MFA / TOTP prompt
-          const hasOtp = !!document.querySelector("#otp, input[name='totp'], input[name='otp']");
-          if (hasOtp) return 'mfa-required';
-
-          // Read the execution= parameter to determine the action type
-          const execParam = new URLSearchParams(location.search).get('execution') ?? '';
-          const execType = execParam.toUpperCase();
-
-          // Password change / email verify require user input — can't auto-submit
-          if (execType.includes('PASSWORD')) return 'password-change-required';
-          if (execType.includes('VERIFY_EMAIL')) return 'email-verification-required';
-          if (execType.includes('CONFIGURE_TOTP')) return 'totp-setup-required';
-
-          // UPDATE_PROFILE and other safe actions — auto-submit
-          const submit = document.querySelector(
-            "input[type='submit'], button[type='submit'], #kc-login",
-          ) as HTMLElement | null;
-          if (submit) {
-            submit.click();
-            return `interstitial-submitted:${execType}`;
-          }
-          return 'waiting';
-        },
-      });
-      const state = (r?.result as string) ?? '';
-      if (state === 'invalid') {
-        throw new Error('login: invalid username or password');
-      }
-      if (state === 'mfa-required') {
-        throw new Error(
-          'login: MFA TOTP code required — either set F5XC_TOTP_SECRET in your xcsh context or complete the 2FA prompt in the visible Chrome window',
-        );
-      }
-      if (state === 'password-change-required') {
-        throw new Error(
-          'login: password change required — update your password in the visible Chrome window, then retry',
-        );
-      }
-      if (state === 'email-verification-required') {
-        throw new Error('login: email verification required — check your email, then retry');
-      }
-      if (state === 'totp-setup-required') {
-        throw new Error('login: MFA TOTP setup required — complete the setup in the visible Chrome window, then retry');
-      }
-      if (state.startsWith('interstitial-submitted')) {
-        steps.push(`handled Keycloak required-action interstitial (${state.split(':')[1] ?? ''})`);
-      }
-    }
-  }
-
-  const finalTab = await chrome.tabs.get(tabId);
-  throw new Error(`login: did not reach the console within 40s (stuck on ${finalTab.url?.slice(0, 70)})`);
 }
 
 function waitForNavigation(tabId: number): Promise<void> {
@@ -2152,8 +1894,8 @@ function setExplainMode(params: { enabled?: boolean }): { enabled: boolean } {
 /**
  * Set (or clear) the single controlled tab: ungroup the previous tab, attach the
  * debugger, apply the red "xcsh" tab group, and notify the panel. Passing
- * `undefined` unbinds. `navigate`, `login`, and `tabsCreate` all route through
- * this function so the red group and panel session always stay in sync.
+ * `undefined` unbinds. `navigate` and `tabsCreate` both route through this
+ * function so the red group and panel session always stay in sync.
  */
 async function setControlledTab(tabId: number | undefined): Promise<void> {
   const prev = targetTabId;
@@ -2186,9 +1928,8 @@ async function setControlledTab(tabId: number | undefined): Promise<void> {
   }
 }
 
-/** Build the page-context snapshot for the active console tab. */
-async function buildPageContext(tabId: number | undefined): Promise<unknown> {
-  if (tabId === undefined) return null; // no controlled console tab — panel shows inactive
+/** Build the page-context snapshot for the panel's explicitly bound console tab. */
+async function buildPageContext(tabId: number): Promise<unknown> {
   await enableNetworkObserver(tabId);
   let url = '';
   let title = '';
@@ -2223,9 +1964,8 @@ async function chatAnnotate(
     w?: number;
     h?: number;
   },
-  tabId: number | undefined,
+  tabId: number,
 ): Promise<void> {
-  if (tabId === undefined) return;
   const kind = spec.kind ?? 'highlight';
   if (kind === 'highlight') {
     let rect: { x: number; y: number; w: number; h: number } | undefined;
@@ -2971,21 +2711,17 @@ async function diagSuspension(): Promise<{ summary: unknown; turns: unknown; eve
 /** Read-only: per-gate tab-activation readiness timings grouped by run
  *  (bridge/worker/page ms, total, cold/warm, terminal phase). */
 async function diagActivation(): Promise<{ runs: unknown }> {
-  return { runs: summarizeActivations(diagBuffer) };
+  const runs = summarizeActivations(activationBuffer).map(({ runId: _runId, ...metrics }) => metrics);
+  return { runs };
 }
 
 /** Read-only: the most recent init→first-token timeline (per-stage ms, total,
  *  dominant stage, cold/warm) stitched from extension + xcsh spans. */
 async function diagTtft(): Promise<{ timeline: unknown }> {
-  return { timeline: summarizeTtft(diagBuffer) };
-}
-
-/** Capture the login redirect chain from the controlled tab's CDP network events,
- * annotated with the tenant/env each hop resolves to (Phase 0b login-topology). */
-async function captureLoginFlow(_params: unknown, _tabId?: number): Promise<{ hops: unknown[] }> {
-  const tabId = requireTab(_tabId);
-  await enableNetworkObserver(tabId);
-  return { hops: extractRedirects(networkBuffer, sessionKeyFromUrl) };
+  const timeline = summarizeTtft(spanBuffer);
+  if (!timeline) return { timeline: null };
+  const { turnId: _turnId, sid: _sid, ...metrics } = timeline;
+  return { timeline: metrics };
 }
 
 // --- File upload (best-effort, Phase 1) ------------------------------------
@@ -3022,7 +2758,7 @@ async function browserBatch(
       const content = await runTool(action.tool, action.params, tabId);
       results.push({ tool: action.tool, content, is_error: false });
     } catch (e) {
-      results.push({ tool: action.tool, content: String(e), is_error: true });
+      results.push({ tool: action.tool, content: publicRuntimeError(e), is_error: true });
       break; // abort the batch on first error
     }
   }

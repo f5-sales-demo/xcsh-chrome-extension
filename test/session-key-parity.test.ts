@@ -22,7 +22,7 @@ const GOLDEN: Array<[string | undefined, { tenant: string; env: 'production' | '
   ['https://example-corp.console.ves.volterra.io/web/x', { tenant: 'example-corp', env: 'production' }],
   ['https://example-corp.staging.volterra.us/web/home', { tenant: 'example-corp', env: 'staging' }],
   // path/query/fragment are ignored (host-only match)
-  ['https://example-id-005.console.ves.volterra.io/web/home?iss=x', { tenant: 'example-id-005', env: 'production' }],
+  ['https://example-corp.console.ves.volterra.io/web/home?iss=x', { tenant: 'example-corp', env: 'production' }],
   // Keycloak login realms → tenant (suffix stripped), env by host
   [
     'https://login.ves.volterra.io/auth/realms/example-corp-abc123/protocol/openid-connect/auth',

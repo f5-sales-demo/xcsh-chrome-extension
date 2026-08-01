@@ -40,7 +40,7 @@ function convWithTurn(userText: string, asstMsgId: string) {
 
 const delta = (id: string, text: string): ChatDeltaMsg => ({ type: 'chat_delta', id, seq: 0, delta: text });
 const done = (id: string): ChatDoneMsg => ({ type: 'chat_done', id });
-const error = (id: string, err: string): ChatErrorMsg => ({ type: 'chat_error', id, error: err });
+const error = (id: string, _err: string): ChatErrorMsg => ({ type: 'chat_error', id, reason: 'provider-5xx' });
 
 describe('panel tab isolation — reducer matrix', () => {
   test('idle → switch tabs → conversations swap cleanly (no stale content)', () => {
@@ -156,7 +156,7 @@ describe('panel tab isolation — reducer matrix', () => {
       initPanelState(conv),
       { type: 'begin_turn', id: 'c-1', msgId: 'asst-1' },
       { type: 'stream', msg: delta('c-1', 'Working...') },
-      { type: 'abort_turn', at: now() },
+      { type: 'abort_turn', at: now(), reason: 'tab-closed' },
     );
     expect(s.active).toBeNull();
     expect(s.conv.messages.find((m) => m.id === 'asst-1')?.aborted).toBe(true);

@@ -11,7 +11,7 @@
     "components/GatewayConfigForm.tsx": "ef0b4c6cffb698ef6bcaef8524da1789c73ab7bbdd23f7c64b22604aef365f0b",
     "components/GatewayGate.tsx": "65b294e009df21175704257b2334c7f24b5328d2f70b1fb70af8ca9a94a24197",
     "components/HeaderBar.tsx": "38927c445238aba4e806fb67d41e662690b4684286f57b4db35287173415d5ab",
-    "components/MarkdownRenderer.tsx": "eae8552dc0975d7a1367864237fcdd25e9abd9e8fbb3ec4b01b20c39a334bba2",
+    "components/MarkdownRenderer.tsx": "c6179ff85e1b35a9a78e4ef861c44245138b12636f5b9354eb9d1c00d4f58b65",
     "components/ModeToggle.tsx": "4e51fcadb0570b303d74f3a9e201cccde6ffc47d5ff4cb4bc8b1720e1363f5fc",
     "components/ModelSelector.tsx": "5aa0ac4f3f89f4db3608e286be2ebba3183ab214e8cf55c865b1a1b7989b91a8",
     "components/ReferenceChips.tsx": "d67a3cc602720a0b478d5e8bba53568f1a74be7a32246cfcb875c8896da8d7a5",

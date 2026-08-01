@@ -1,9 +1,7 @@
 /**
- * Conversation + reference model — PURE data ops over the chat history that the
- * side panel persists to chrome.storage.local. The storage adapter
- * (side-panel-store.ts) holds the chrome I/O; all shaping lives here so it is
- * unit-testable. References are deduped by url and stamped with the message they
- * first appeared in, for the persistent per-conversation "References" drawer.
+ * Conversation + reference model — pure data operations over process-local chat
+ * state. References are deduped by URL and stamped with the message where they
+ * first appeared. Identity-bearing transcript data is never persisted.
  */
 
 import type { ChatRefWire, InteractionMode, PanelAbortReason } from './chat-protocol';
@@ -42,13 +40,6 @@ export interface Conversation {
   messages: StoredMessage[];
   references: ChatReference[];
 }
-
-export interface ChatIndex {
-  conversations: string[];
-  active: string | null;
-}
-
-export const CONV_CAP = 50;
 
 export function deriveTitle(text: string): string {
   const t = text.trim().replace(/\s+/g, ' ');
@@ -117,19 +108,6 @@ export function finalizeAssistant(
   };
 }
 
-export function addToIndex(index: ChatIndex, convId: string): ChatIndex {
-  const conversations = index.conversations.includes(convId) ? index.conversations : [...index.conversations, convId];
-  return { conversations, active: convId };
-}
-
-export function pruneConversations(index: ChatIndex, cap = CONV_CAP): { index: ChatIndex; removed: string[] } {
-  if (index.conversations.length <= cap) return { index, removed: [] };
-  const removed = index.conversations.slice(0, index.conversations.length - cap);
-  const conversations = index.conversations.slice(removed.length);
-  const active = index.active && removed.includes(index.active) ? (conversations.at(-1) ?? null) : index.active;
-  return { index: { conversations, active }, removed };
-}
-
 export function setMode(conv: Conversation, mode: InteractionMode, at: number): Conversation {
   return {
     ...conv,
@@ -154,53 +132,21 @@ export function markAborted(
   conv: Conversation,
   msgId: string,
   at: number,
-  reason?: PanelAbortReason,
+  reason: PanelAbortReason,
   retryPrompt?: string,
 ): Conversation {
   return {
     ...conv,
     messages: conv.messages.map((m) =>
-      m.id === msgId
-        ? { ...m, aborted: true, ...(reason ? { abortReason: reason } : {}), ...(retryPrompt ? { retryPrompt } : {}) }
-        : m,
+      m.id === msgId ? { ...m, aborted: true, abortReason: reason, ...(retryPrompt ? { retryPrompt } : {}) } : m,
     ),
     updatedAt: at,
   };
 }
 
-/** Map of live tab id → conversation id, for per-tab chat sessions. */
-export interface TabIndex {
-  byTab: Record<string, string>;
-}
-
-export function emptyTabIndex(): TabIndex {
-  return { byTab: {} };
-}
-
-export function setTabConv(index: TabIndex, tabId: number, convId: string): TabIndex {
-  return { byTab: { ...index.byTab, [String(tabId)]: convId } };
-}
-
-export function tabConv(index: TabIndex, tabId: number): string | undefined {
-  return index.byTab[String(tabId)];
-}
-
-export function removeTab(index: TabIndex, tabId: number): { index: TabIndex; removedConv: string | undefined } {
-  const key = String(tabId);
-  const removedConv = index.byTab[key];
-  if (removedConv === undefined) return { index, removedConv: undefined };
-  const byTab = { ...index.byTab };
-  delete byTab[key];
-  return { index: { byTab }, removedConv };
-}
-
-// --- SessionIndex: per-TENANT session map (Phase 2) ------------------------
-// Conversations are keyed by the session key ("tenant|env"), so MANY tabs of the
-// same tenant share ONE conversation and switching to a different tenant's tab
-// never carries the prior tenant's context. `byTab` maps a live tab to its
-// session key (for resolving the panel + cleanup on close); closing a tab does
-// NOT delete the tenant's conversation — it persists for that tenant's other/
-// future tabs.
+// --- SessionIndex: transient per-(tenant,tab) routing -----------------------
+// Each live tab owns a distinct conversation. Including the session key prevents
+// a same-tab tenant change from carrying the prior tenant's context.
 export interface SessionIndex {
   /** per-(tenant,tab) conv-index key ("tenant|env#tabId", see `tabConvKey`) →
    *  conversation id. Tenant is part of the key so two tabs of one tenant keep
@@ -212,8 +158,8 @@ export interface SessionIndex {
 
 /** The per-(tenant,tab) conv-index key. Tenant is part of the key so two tabs of
  *  one tenant keep distinct transcripts and a re-login never carries context
- *  (#136). This is the ONLY shape stored in `byTenant` — the live panel and the
- *  migration both key through here so no bare "tenant|env" entry can leak (#166). */
+ *  (#136). This is the only shape stored in `byTenant`, so no bare
+ *  "tenant|env" entry can leak (#166). */
 export function tabConvKey(sessionKey: string, tabId: number): string {
   return `${sessionKey}#${tabId}`;
 }
@@ -222,7 +168,7 @@ export function emptySessionIndex(): SessionIndex {
   return { byTenant: {}, byTab: {} };
 }
 
-/** Bind a tab to a tenant's conversation (creating/reusing the tenant session). */
+/** Bind a tab to its process-local conversation. */
 export function setTenantConv(index: SessionIndex, sessionKey: string, tabId: number, convId: string): SessionIndex {
   return {
     byTenant: { ...index.byTenant, [sessionKey]: convId },
@@ -242,9 +188,8 @@ export function tabSessionKey(index: SessionIndex, tabId: number): string | unde
 
 /** Forget a tab (on close): drop its `byTab` reverse mapping AND its per-tab
  * `byTenant` entry (keyed "tenant|env#tabId" → convId) so no orphan index entry
- * lingers unreachable and unpruned. The persisted Conversation object itself is
- * left intact (transcripts survive a close). A `byTenant` entry still shared by
- * another live tab (legacy migrated bare-session-key entries) is kept. */
+ * lingers unreachable and unpruned. A `byTenant` entry still shared by another
+ * live tab is kept. */
 export function removeTabSession(index: SessionIndex, tabId: number): SessionIndex {
   const key = String(tabId);
   const convKey = index.byTab[key];
@@ -254,16 +199,4 @@ export function removeTabSession(index: SessionIndex, tabId: number): SessionInd
   const byTenant = { ...index.byTenant };
   if (!Object.values(byTab).includes(convKey)) delete byTenant[convKey];
   return { byTenant, byTab };
-}
-
-/** Build a SessionIndex from an old TabIndex, given each tab's resolved session
- * key (best-effort migration; entries with an unresolvable key are dropped). Keys
- * byTenant on the compound `tabConvKey` — the SAME shape the live panel reads — so
- * migrated conversations are reachable and no bare "tenant|env" key orphans (#166). */
-export function sessionIndexFromTabIndex(
-  entries: Array<{ tabId: number; sessionKey: string; convId: string }>,
-): SessionIndex {
-  let idx = emptySessionIndex();
-  for (const e of entries) idx = setTenantConv(idx, tabConvKey(e.sessionKey, e.tabId), e.tabId, e.convId);
-  return idx;
 }

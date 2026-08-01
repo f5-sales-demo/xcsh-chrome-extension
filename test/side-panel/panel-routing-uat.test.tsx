@@ -30,10 +30,10 @@ interface Harness {
   api: () => ReturnType<typeof usePanel>;
 }
 
-const F5_PROD_TAB = { id: 7, url: 'https://example-id-005.console.ves.volterra.io/web/home' };
-const GLOBEX_TAB = { id: 8, url: 'https://globex.console.ves.volterra.io/web/home' };
-const F5_KEY = 'example-id-005|production';
-const GLOBEX_KEY = 'example-id-001';
+const F5_PROD_TAB = { id: 7, url: 'https://example-corp.console.ves.volterra.io/web/home' };
+const PARTNER_TAB = { id: 8, url: 'https://example-partners.console.ves.volterra.io/web/home' };
+const F5_KEY = 'example-corp|production';
+const PARTNER_KEY = 'example-partners|production';
 
 // Build a controllable chrome stub + a harness component that exposes usePanel's API.
 function mount(activeTab: { id: number; url: string }, tabsById: Record<number, { id: number; url: string }>): Harness {
@@ -156,14 +156,14 @@ describe('panel routing UAT (#166)', () => {
   });
 
   it('RC-2: switching to another tenant tab re-fetches page context for the FOCUSED tab', async () => {
-    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: GLOBEX_TAB });
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: PARTNER_TAB });
     await driveToReady(h, [
       { tenant: F5_KEY, env: 'production' },
-      { tenant: GLOBEX_KEY, env: 'production' },
+      { tenant: PARTNER_KEY, env: 'production' },
     ]);
     const before = h.posted.length;
 
-    h.fireActivated(8); // user focuses the globex tab
+    h.fireActivated(8); // user focuses the partner tab
 
     await waitFor(() => {
       const ctx = h.posted.slice(before).find((m) => m.type === 'get_page_context');
@@ -188,7 +188,7 @@ describe('panel routing UAT (#166)', () => {
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
 
     // The agent navigates THIS tab — its URL changes, firing onUpdated for tab 7.
-    h.fireUpdated(7, 'https://example-id-005.console.ves.volterra.io/web/example-id-007');
+    h.fireUpdated(7, 'https://example-corp.console.ves.volterra.io/web/example-id-007');
 
     // The turn must still be active (not suspended) so the rest of the reply renders.
     await waitFor(() => expect(h.api().state.active?.id).toBe(turnId));
@@ -216,7 +216,7 @@ describe('panel routing UAT (#166)', () => {
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
 
     // The agent navigates THIS tab to another SAME-tenant page.
-    h.fireUpdated(7, 'https://example-id-005.console.ves.volterra.io/web/example-id-007');
+    h.fireUpdated(7, 'https://example-corp.console.ves.volterra.io/web/example-id-007');
 
     // Give the async gate a chance to run, then assert nothing reset/flashed.
     await waitFor(() => expect(h.api().state.active?.id).toBe(turnId));
@@ -253,19 +253,40 @@ describe('panel routing UAT (#166)', () => {
   it('switching to a DIFFERENT tab mid-turn DOES suspend (no cross-tab bleed)', async () => {
     // The example-id-007 direction of the same guard: a genuine tab switch must still
     // suspend the in-flight turn so tab 8 can start its own and tab 7's stream is
-    // dropped (preserved in storage, not bled into tab 8).
-    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: GLOBEX_TAB });
+    // dropped (preserved in process-local state, not bled into tab 8).
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: PARTNER_TAB });
     await driveToReady(h, [
       { tenant: F5_KEY, env: 'production' },
-      { tenant: GLOBEX_KEY, env: 'production' },
+      { tenant: PARTNER_KEY, env: 'production' },
     ]);
 
     h.api().sendMessage('do a thing');
     await waitFor(() => expect(h.api().state.active).toBeTruthy());
 
-    h.fireActivated(8); // user switches to the globex tab
+    h.fireActivated(8); // user switches to the partner tab
 
     await waitFor(() => expect(h.api().state.active).toBeNull());
+  });
+
+  it('restores the terminal turn state after switching away and back', async () => {
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB, 8: PARTNER_TAB });
+    await driveToReady(h, [
+      { tenant: F5_KEY, env: 'production' },
+      { tenant: PARTNER_KEY, env: 'production' },
+    ]);
+
+    h.api().sendMessage('trigger a fixed provider failure');
+    await waitFor(() => expect(h.api().state.active).toBeTruthy());
+    const turnId = lastOfType(h.posted, 'chat_request')?.id as string;
+    h.pushToPanel({ type: 'chat_error', id: turnId, reason: 'provider-5xx' });
+    await waitFor(() => expect(h.api().state.active).toBeNull());
+    expect(h.api().state.conv.messages.at(-1)?.abortReason).toBe('provider-5xx');
+
+    h.fireActivated(8);
+    await waitFor(() => expect(h.api().state.conv.messages.at(-1)?.abortReason).not.toBe('provider-5xx'));
+    h.fireActivated(7);
+
+    await waitFor(() => expect(h.api().state.conv.messages.at(-1)?.abortReason).toBe('provider-5xx'));
   });
 
   it('SPA in-tab navigation updates contextMeta to the NEW page title', async () => {
@@ -284,7 +305,7 @@ describe('panel routing UAT (#166)', () => {
     h.pushToPanel({
       type: 'tab_bound',
       tabId: 7,
-      url: 'https://example-id-005.console.ves.volterra.io/web/manage/lb/origin_pools',
+      url: 'https://example-corp.console.ves.volterra.io/web/manage/lb/origin_pools',
       title: undefined,
       chipOnly: true,
     });
@@ -296,7 +317,7 @@ describe('panel routing UAT (#166)', () => {
     h.pushToPanel({
       type: 'tab_bound',
       tabId: 7,
-      url: 'https://example-id-005.console.ves.volterra.io/web/manage/lb/origin_pools',
+      url: 'https://example-corp.console.ves.volterra.io/web/manage/lb/origin_pools',
       title: 'Origin Pools',
     });
 

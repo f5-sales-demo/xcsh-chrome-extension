@@ -1,23 +1,92 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type BridgeSnap,
-  extractRedirects,
+  DIAG_STORAGE_KEYS,
   gateBlockEvidence,
   isNoiseKind,
+  LEGACY_DIAG_STORAGE_KEYS,
   maxGap,
+  publicBridgeDiagnostics,
   pushCapped,
+  safeDiagnosticDetail,
   summarizeActivations,
   summarizeSuspension,
   summarizeTtft,
   summarizeTurns,
 } from '../src/diagnostics';
-import { sessionKeyFromUrl } from '../src/tab-binding';
 
 describe('pushCapped', () => {
   it('drops the oldest entries when over cap', () => {
     const buf: number[] = [];
     for (let i = 0; i < 5; i++) pushCapped(buf, i, 3);
     expect(buf).toEqual([2, 3, 4]);
+  });
+});
+
+describe('PII-safe diagnostics', () => {
+  it('persists only the metric fields required by diagnostic summaries', () => {
+    const unsafe = {
+      tenant: 'example-corp',
+      key: 'example-corp|production',
+      url: 'https://example-corp.console.ves.volterra.io/web/home',
+      email: 'user@example.com',
+      password: '<XC_API_TOKEN>',
+      credentials: { opaque: true },
+      evidence: { bridges: [{ tenant: 'example-corp' }] },
+    };
+    expect(
+      safeDiagnosticDetail({
+        wsState: 'open',
+        ms: 12,
+        port: 19222,
+        diagnosis: 'stale-key',
+        error: 'provider response named a customer account',
+        action: 'customer-specific-action',
+        kind: 'customer-specific-message',
+        id: 'turn-1',
+        runId: 4,
+        sid: 'tab-7',
+        tabId: 7,
+        ...unsafe,
+      }),
+    ).toEqual({ wsState: 'open', ms: 12, port: 19222, diagnosis: 'stale-key' });
+    expect(safeDiagnosticDetail({ action: 'bind', error: true, kind: 'provision', ok: true })).toEqual({
+      action: 'bind',
+      error: true,
+      kind: 'provision',
+      ok: true,
+    });
+  });
+
+  it('summarizes live bridges without exposing tenant, environment, or session identifiers', () => {
+    const rows = publicBridgeDiagnostics([
+      {
+        port: 19222,
+        tenant: 'example-corp',
+        env: 'production',
+        sessionId: 'tab-7',
+        lastSeen: 1234,
+        contextBound: true,
+      },
+    ]);
+    expect(rows).toEqual([
+      {
+        port: 19222,
+        lastSeen: 1234,
+        contextBound: true,
+        identityBound: true,
+        sessionBound: true,
+      },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain('example-corp');
+    expect(JSON.stringify(rows)).not.toContain('tab-7');
+  });
+
+  it('uses new metric-only storage keys and explicitly retires the legacy keys', () => {
+    expect(DIAG_STORAGE_KEYS).toEqual(['xcsh.diag.metrics.v2', 'xcsh.diag.noise.v2']);
+    expect(LEGACY_DIAG_STORAGE_KEYS).toEqual(['xcsh.diag.suspension', 'xcsh.diag.noise']);
+    const retired = new Set<string>(LEGACY_DIAG_STORAGE_KEYS);
+    expect(DIAG_STORAGE_KEYS.some((key) => retired.has(key))).toBe(false);
   });
 });
 
@@ -52,49 +121,13 @@ describe('summarizeSuspension', () => {
   });
 });
 
-describe('extractRedirects', () => {
-  it('turns CDP redirectResponse events into an annotated tenant/env chain', () => {
-    const events = [
-      // console → Keycloak login (302), lands on a tenant realm
-      {
-        method: 'Network.requestWillBeSent',
-        request: { url: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth' },
-        redirectResponse: { url: 'https://example-corp.console.ves.volterra.io/web/home', status: 302 },
-      },
-      // a non-redirect event is ignored
-      {
-        method: 'Network.responseReceived',
-        response: { url: 'https://example-corp.console.ves.volterra.io/', status: 200 },
-      },
-      // login → back to console (302)
-      {
-        method: 'Network.requestWillBeSent',
-        request: { url: 'https://example-corp.console.ves.volterra.io/web/home' },
-        redirectResponse: {
-          url: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth',
-          status: 302,
-        },
-      },
-    ];
-    const hops = extractRedirects(events, sessionKeyFromUrl);
-    expect(hops).toHaveLength(2);
-    expect(hops[0]).toEqual({
-      from: 'https://example-corp.console.ves.volterra.io/web/home',
-      to: 'https://login.ves.volterra.io/auth/realms/example-corp-x1/protocol/openid-connect/auth',
-      status: 302,
-      toKey: { tenant: 'example-corp', env: 'production' },
-    });
-    expect(hops[1].toKey).toEqual({ tenant: 'example-corp', env: 'production' });
-  });
-});
-
 // RC-3 (#166): when the panel gate blocks a valid, connected tenant tab, capture
 // a snapshot of the live registry and COMPUTE which candidate cause it matches
 // from the data — so the diagnosis is evidence, not a guess.
 describe('gateBlockEvidence (RC-3)', () => {
   const b = (over: Partial<BridgeSnap>): BridgeSnap => ({
     port: 19222,
-    tenant: 'example-id-005',
+    tenant: 'example-alpha',
     env: 'production',
     sessionId: 'tab-7',
     contextBound: true,
@@ -106,7 +139,7 @@ describe('gateBlockEvidence (RC-3)', () => {
     const e = gateBlockEvidence({
       tabId: 7,
       sid: 'tab-7',
-      key: 'example-id-005|production',
+      key: 'example-alpha|production',
       activePort: 19222,
       targetTabId: 7,
       bridges: [b({})],
@@ -120,7 +153,7 @@ describe('gateBlockEvidence (RC-3)', () => {
     const e = gateBlockEvidence({
       tabId: 7,
       sid: 'tab-7',
-      key: 'example-id-005|production',
+      key: 'example-alpha|production',
       activePort: 19222,
       targetTabId: 7,
       bridges: [b({ tenant: 'example-corp', env: 'staging' })], // own sid, wrong tenant
@@ -135,7 +168,7 @@ describe('gateBlockEvidence (RC-3)', () => {
     const e = gateBlockEvidence({
       tabId: 7,
       sid: 'tab-7',
-      key: 'example-id-005|production',
+      key: 'example-alpha|production',
       activePort: 19222,
       targetTabId: 7,
       bridges: [b({ env: null })], // tenant set, env missing
@@ -148,10 +181,10 @@ describe('gateBlockEvidence (RC-3)', () => {
     const e = gateBlockEvidence({
       tabId: 7,
       sid: 'tab-7',
-      key: 'example-id-005|production',
+      key: 'example-alpha|production',
       activePort: 19223,
       targetTabId: 9,
-      bridges: [b({ port: 19223, sessionId: 'tab-9', tenant: 'example-id-007', env: 'production' })],
+      bridges: [b({ port: 19223, sessionId: 'tab-9', tenant: 'example-other', env: 'production' })],
     });
     expect(e.keyLive).toBe(false);
     expect(e.ownSidPorts).toEqual([]);
@@ -162,7 +195,7 @@ describe('gateBlockEvidence (RC-3)', () => {
     const e = gateBlockEvidence({
       tabId: 7,
       sid: 'tab-7',
-      key: 'example-id-005|production',
+      key: 'example-alpha|production',
       activePort: null,
       targetTabId: 7,
       bridges: [b({ open: false })],
@@ -173,47 +206,43 @@ describe('gateBlockEvidence (RC-3)', () => {
 
 // Turn-lifecycle diagnostic (#170 follow-up): make intermittent stalls observable.
 // The SW records `chat_route` (a turn resolved to a port, or errored with no
-// worker) and `chat_reply` (first-inbound latency). summarizeTurns pairs them by
-// id so a routed turn with NO reply surfaces as `unanswered` — the "accepted but
-// hangs, no error" case that gate_block never captured.
+// worker) and `chat_reply` (first-inbound latency). The summary reports aggregate
+// counts so a stall remains visible without persisting turn or tab identifiers.
 describe('summarizeTurns (turn-lifecycle diagnostic)', () => {
   const ev = (event: string, extra: Record<string, unknown>) => ({ t: 0, event, ...extra });
 
   it('is all-zero for an empty buffer', () => {
-    expect(summarizeTurns([])).toEqual({ routed: 0, errored: 0, replied: 0, unanswered: [], maxReplyMs: 0 });
+    expect(summarizeTurns([])).toEqual({ routed: 0, errored: 0, replied: 0, unanswered: 0, maxReplyMs: 0 });
   });
 
   it('pairs a routed turn with its reply and records the latency', () => {
-    const s = summarizeTurns([
-      ev('chat_route', { id: 'c1', tabId: 7, port: 19222 }),
-      ev('chat_reply', { id: 'c1', ms: 850 }),
-    ]);
+    const s = summarizeTurns([ev('chat_route', { port: 19222 }), ev('chat_reply', { ms: 850 })]);
     expect(s.routed).toBe(1);
     expect(s.replied).toBe(1);
-    expect(s.unanswered).toEqual([]);
+    expect(s.unanswered).toBe(0);
     expect(s.maxReplyMs).toBe(850);
   });
 
   it('flags a routed turn with NO reply as unanswered (the stall signal)', () => {
-    const s = summarizeTurns([ev('chat_route', { id: 'c1', tabId: 7, port: 19222 })]);
+    const s = summarizeTurns([ev('chat_route', { port: 19222 })]);
     expect(s.routed).toBe(1);
     expect(s.replied).toBe(0);
-    expect(s.unanswered).toEqual(['c1']);
+    expect(s.unanswered).toBe(1);
   });
 
   it('counts a no-worker route as errored, not routed', () => {
-    const s = summarizeTurns([ev('chat_route', { id: 'c1', tabId: 7, error: true })]);
+    const s = summarizeTurns([ev('chat_route', { error: true })]);
     expect(s.errored).toBe(1);
     expect(s.routed).toBe(0);
-    expect(s.unanswered).toEqual([]);
+    expect(s.unanswered).toBe(0);
   });
 
   it('reports the slowest first-reply latency across turns', () => {
     const s = summarizeTurns([
-      ev('chat_route', { id: 'c1', port: 19222 }),
-      ev('chat_reply', { id: 'c1', ms: 300 }),
-      ev('chat_route', { id: 'c2', port: 19223 }),
-      ev('chat_reply', { id: 'c2', ms: 1200 }),
+      ev('chat_route', { port: 19222 }),
+      ev('chat_reply', { ms: 300 }),
+      ev('chat_route', { port: 19223 }),
+      ev('chat_reply', { ms: 1200 }),
     ]);
     expect(s.replied).toBe(2);
     expect(s.maxReplyMs).toBe(1200);

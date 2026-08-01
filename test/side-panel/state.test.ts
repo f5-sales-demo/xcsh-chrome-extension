@@ -46,11 +46,12 @@ describe('panelReducer', () => {
     let s = base();
     s = { ...s, conv: startAssistant(s.conv, 'a1', 0) };
     s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1' });
-    s = panelReducer(s, { type: 'stream', msg: { type: 'chat_error', id: 't1', error: 'boom' }, at: 5 });
+    s = panelReducer(s, { type: 'stream', msg: { type: 'chat_error', id: 't1', reason: 'provider-5xx' }, at: 5 });
     expect(s.active).toBeNull();
     const msg = s.conv.messages.find((m) => m.id === 'a1');
     expect(msg?.aborted).toBe(true);
-    expect(msg?.text).toBe('boom');
+    expect(msg?.text).toBe('');
+    expect(msg?.abortReason).toBe('provider-5xx');
   });
 
   it('carries the wire reason + the prompt onto a chat_error message (for distinct text + Retry)', () => {
@@ -59,7 +60,7 @@ describe('panelReducer', () => {
     s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1', prompt: 'create a load balancer' });
     s = panelReducer(s, {
       type: 'stream',
-      msg: { type: 'chat_error', id: 't1', error: 'gone', reason: 'bridge-unresponsive' },
+      msg: { type: 'chat_error', id: 't1', reason: 'bridge-unresponsive' },
       at: 5,
     });
     const msg = s.conv.messages.find((m) => m.id === 'a1');

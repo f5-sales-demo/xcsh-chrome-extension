@@ -4,22 +4,22 @@
  * top-level `export` in the entry would make the bundle an ES module, which the
  * classic `<script src="options.js">` tag in options.html cannot load.
  *
- * Faithful port: sends the same `status_request` / `bridges_request` messages
- * and reads the same `xcsh.diag.suspension` storage key, mirroring the old DOM.
+ * Reads metric-only lifecycle diagnostics and bridge-health summaries. Tenant,
+ * environment, and session values never cross into the options page.
  */
 
 import { useCallback, useEffect, useState } from 'preact/hooks';
-import { type DiagEvent, summarizeSuspension } from '../diagnostics';
+import { DIAG_STORAGE_KEYS, type DiagEvent, summarizeSuspension } from '../diagnostics';
 
-const DIAG_KEY = 'xcsh.diag.suspension';
+const [DIAG_KEY] = DIAG_STORAGE_KEYS;
 
 /** One discovered bridge, as reported by the SW's `bridges_request` reply. */
 interface BridgeRow {
   port: number;
-  tenant: string | null;
-  env: string | null;
-  sessionId: string | null;
   lastSeen: number;
+  contextBound: boolean;
+  identityBound: boolean;
+  sessionBound: boolean;
 }
 
 /** Ping the service worker; a missing reply / runtime error counts as disconnected. */
@@ -55,7 +55,13 @@ async function readBridges(): Promise<string> {
   );
   const rows = resp?.bridges ?? [];
   return rows.length
-    ? rows.map((b) => `:${b.port}  ${b.tenant ?? '—'}·${b.env ?? '—'}  ${b.sessionId ?? ''}`).join('\n')
+    ? rows
+        .map(
+          (b) =>
+            `:${b.port}  identity ${b.identityBound ? 'bound' : 'unbound'} · ` +
+            `session ${b.sessionBound ? 'bound' : 'unbound'} · context ${b.contextBound ? 'bound' : 'unbound'}`,
+        )
+        .join('\n')
     : '(none)';
 }
 

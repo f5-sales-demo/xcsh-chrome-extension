@@ -1,9 +1,9 @@
 {
-  "contractVersion": "1.8.0",
+  "contractVersion": "2.0.0",
   "schemas": {
     "chat_request": {
       "type": "object",
-      "required": ["type", "id", "text", "context", "mode"],
+      "required": ["type", "id", "text", "context", "mode", "tabId", "sessionKey"],
       "properties": {
         "type": {
           "const": "chat_request",
@@ -125,6 +125,13 @@
             }
           ]
         },
+        "tabId": {
+          "type": "number"
+        },
+        "sessionKey": {
+          "minLength": 1,
+          "type": "string"
+        },
         "history_hint": {
           "type": "string"
         }
@@ -198,7 +205,7 @@
     },
     "chat_error": {
       "type": "object",
-      "required": ["type", "id", "error"],
+      "required": ["type", "id", "reason"],
       "properties": {
         "type": {
           "const": "chat_error",
@@ -206,9 +213,6 @@
         },
         "id": {
           "pattern": "^c-",
-          "type": "string"
-        },
-        "error": {
           "type": "string"
         },
         "reason": {
@@ -630,6 +634,8 @@
           "truncated": false
         },
         "mode": "educational",
+        "tabId": 7,
+        "sessionKey": "example-corp|production",
         "history_hint": "conv-1"
       },
       "chat_request_no_context": {
@@ -637,7 +643,9 @@
         "id": "c-2222",
         "text": "help me build a WAF policy",
         "context": null,
-        "mode": "configuration"
+        "mode": "configuration",
+        "tabId": 7,
+        "sessionKey": "example-corp|production"
       },
       "chat_stop": {
         "type": "chat_stop",
@@ -673,7 +681,6 @@
       "chat_error": {
         "type": "chat_error",
         "id": "c-1111",
-        "error": "HTTP 403 forbidden",
         "reason": "provider-4xx"
       },
       "chat_tool_notice": {
@@ -795,6 +802,8 @@
             "truncated": false
           },
           "mode": "educational",
+          "tabId": 7,
+          "sessionKey": "example-corp|production",
           "history_hint": "conv-1"
         }
       },
@@ -840,6 +849,8 @@
             "truncated": false
           },
           "mode": "wizard",
+          "tabId": 7,
+          "sessionKey": "example-corp|production",
           "history_hint": "conv-1"
         }
       },
@@ -850,7 +861,107 @@
           "type": "chat_request",
           "id": "c-1",
           "context": null,
-          "mode": "educational"
+          "mode": "educational",
+          "tabId": 7,
+          "sessionKey": "example-corp|production"
+        }
+      },
+      {
+        "schema": "chat_request",
+        "why": "missing tabId",
+        "value": {
+          "type": "chat_request",
+          "id": "c-1111",
+          "text": "What does this load balancer do?",
+          "context": {
+            "v": 1,
+            "capturedAt": 1719000000000,
+            "tabId": 7,
+            "url": "https://example-corp.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+            "path": "/web/namespaces/default/http_loadbalancers/lb1",
+            "title": "lb1 — Distributed Cloud",
+            "ax": {
+              "role": "WebArea",
+              "name": "lb1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Edit",
+                  "ref": "e12"
+                }
+              ]
+            },
+            "api": {
+              "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+              "status": 200,
+              "resourceType": "http_loadbalancers",
+              "body": {
+                "metadata": {
+                  "name": "lb1"
+                },
+                "spec": {
+                  "domains": ["lb1.example.com"]
+                }
+              },
+              "truncated": false
+            },
+            "truncated": false
+          },
+          "mode": "educational",
+          "sessionKey": "example-corp|production"
+        }
+      },
+      {
+        "schema": "chat_request",
+        "why": "missing sessionKey",
+        "value": {
+          "type": "chat_request",
+          "id": "c-1111",
+          "text": "What does this load balancer do?",
+          "context": {
+            "v": 1,
+            "capturedAt": 1719000000000,
+            "tabId": 7,
+            "url": "https://example-corp.console.ves.volterra.io/web/namespaces/default/http_loadbalancers/lb1",
+            "path": "/web/namespaces/default/http_loadbalancers/lb1",
+            "title": "lb1 — Distributed Cloud",
+            "ax": {
+              "role": "WebArea",
+              "name": "lb1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Edit",
+                  "ref": "e12"
+                }
+              ]
+            },
+            "api": {
+              "url": "/api/config/namespaces/default/http_loadbalancers/lb1",
+              "status": 200,
+              "resourceType": "http_loadbalancers",
+              "body": {
+                "metadata": {
+                  "name": "lb1"
+                },
+                "spec": {
+                  "domains": ["lb1.example.com"]
+                }
+              },
+              "truncated": false
+            },
+            "truncated": false
+          },
+          "mode": "educational",
+          "tabId": 7
+        }
+      },
+      {
+        "schema": "chat_error",
+        "why": "missing reason",
+        "value": {
+          "type": "chat_error",
+          "id": "c-1"
         }
       },
       {

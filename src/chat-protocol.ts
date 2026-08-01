@@ -35,8 +35,8 @@ export interface ChatRequestMsg {
   context: unknown; // a PageContextSnapshot, passed through opaquely
   mode: InteractionMode;
   history_hint?: string;
-  tabId?: number; // the panel's bound tab, so the SW routes to THAT tab's worker (#33)
-  sessionKey?: string; // the tab's current "tenant|env"; SW refuses a worker on this
+  tabId: number; // the panel's bound tab, so the SW routes to THAT tab's worker (#33)
+  sessionKey: string; // the tab's current "tenant|env"; SW refuses a worker on this
   // tab's sid that advertises a different key (stale after a same-tab re-login, #166)
 }
 
@@ -51,11 +51,8 @@ export interface ChatDoneMsg {
   id: string;
   references?: ChatRefWire[];
 }
-/** Machine-readable cause of a terminal chat_error, so the panel can render a
- * distinct, actionable message (and decide whether to auto-recover) instead of a
- * generic failure. Additive/optional on the wire (contract 1.6.0); an omitted
- * reason means an unclassified error (show the raw error text). Shared vocabulary
- * with xcsh (keep both lists identical). */
+/** Machine-readable cause of a terminal chat_error. Raw provider error text is
+ * deliberately absent because it can carry identity-bearing response content. */
 export const CHAT_ERROR_REASONS = [
   'bridge-disconnected', // the worker's bridge closed mid-turn
   'bridge-unresponsive', // the socket looked open but the worker never answered
@@ -81,8 +78,7 @@ export type PanelAbortReason = ChatErrorReason | (typeof PANEL_ONLY_ABORT_REASON
 export interface ChatErrorMsg {
   type: 'chat_error';
   id: string;
-  error: string;
-  reason?: ChatErrorReason;
+  reason: ChatErrorReason;
 }
 export type ChatStreamMsg = ChatDeltaMsg | ChatDoneMsg | ChatErrorMsg;
 
@@ -202,7 +198,6 @@ export interface ChatTurnState {
   text: string;
   status: 'streaming' | 'done' | 'error';
   references: ChatRefWire[];
-  error?: string;
   lastSeq: number;
 }
 
@@ -212,14 +207,12 @@ export function buildChatRequest(
   text: string,
   context: unknown,
   mode: InteractionMode,
+  tabId: number,
+  sessionKey: string,
   historyHint?: string,
-  tabId?: number,
-  sessionKey?: string | null,
 ): ChatRequestMsg {
-  const msg: ChatRequestMsg = { type: 'chat_request', id, text, context, mode };
+  const msg: ChatRequestMsg = { type: 'chat_request', id, text, context, mode, tabId, sessionKey };
   if (historyHint !== undefined) msg.history_hint = historyHint;
-  if (tabId !== undefined) msg.tabId = tabId;
-  if (sessionKey) msg.sessionKey = sessionKey;
   return msg;
 }
 
@@ -243,7 +236,7 @@ export function reduceChatTurn(state: ChatTurnState, msg: ChatStreamMsg): ChatTu
   if (msg.type === 'chat_done') {
     return { ...state, status: 'done', references: msg.references ?? [] };
   }
-  return { ...state, status: 'error', error: msg.error };
+  return { ...state, status: 'error' };
 }
 
 export function isSkillsList(msg: unknown): msg is SkillsListMsg {
@@ -254,7 +247,11 @@ export function isSkillsList(msg: unknown): msg is SkillsListMsg {
 
 export function isChatInbound(msg: unknown): msg is ChatInbound {
   if (!msg || typeof msg !== 'object') return false;
-  const t = (msg as { type?: unknown }).type;
+  const candidate = msg as { type?: unknown; reason?: unknown };
+  const t = candidate.type;
+  if (t === 'chat_error') {
+    return CHAT_ERROR_REASONS.includes(candidate.reason as ChatErrorReason);
+  }
   return (
     t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive'
   );

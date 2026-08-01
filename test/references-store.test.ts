@@ -1,27 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 import { DEFAULT_MODE } from '../src/chat-protocol';
 import {
-  addToIndex,
   appendAssistantDelta,
   appendToolNotice,
   appendUserMessage,
-  type ChatIndex,
-  CONV_CAP,
   deriveTitle,
   emptySessionIndex,
-  emptyTabIndex,
   finalizeAssistant,
   markAborted,
   newConversation,
-  pruneConversations,
-  removeTab,
   removeTabSession,
-  sessionIndexFromTabIndex,
   setMode,
-  setTabConv,
   setTenantConv,
   startAssistant,
-  tabConv,
   tabConvKey,
   tabSessionKey,
   tenantConv,
@@ -54,16 +45,6 @@ describe('conversation lifecycle', () => {
     expect(c.references).toHaveLength(2);
     expect(c.messages[0].refs).toHaveLength(2);
     expect(c.references.every((r) => r.firstSeenMsg === 'm1')).toBe(true);
-  });
-});
-
-describe('pruneConversations', () => {
-  it('drops oldest beyond the cap', () => {
-    let idx: ChatIndex = { conversations: [], active: null };
-    for (let i = 0; i < CONV_CAP + 3; i++) idx = addToIndex(idx, `conv-${i}`);
-    const { index, removed } = pruneConversations(idx);
-    expect(index.conversations).toHaveLength(CONV_CAP);
-    expect(removed).toEqual(['conv-0', 'conv-1', 'conv-2']);
   });
 });
 
@@ -107,7 +88,7 @@ describe('interaction modes and tool entries (addendum)', () => {
     c = startAssistant(c, 'm1', 2);
     c = appendAssistantDelta(c, 'm1', 'Starting response...');
     const beforeTime = c.updatedAt;
-    c = markAborted(c, 'm1', 5);
+    c = markAborted(c, 'm1', 5, 'user-stop');
     expect(c.messages[0].aborted).toBe(true);
     expect(c.updatedAt).toBe(5);
     expect(c.updatedAt).toBeGreaterThan(beforeTime);
@@ -120,7 +101,7 @@ describe('interaction modes and tool entries (addendum)', () => {
     c = appendAssistantDelta(c, 'a1', 'Hi');
     c = startAssistant(c, 'a2', 4);
     c = appendAssistantDelta(c, 'a2', 'Another');
-    c = markAborted(c, 'a1', 5);
+    c = markAborted(c, 'a1', 5, 'user-stop');
     expect(c.messages[0].role).toBe('user');
     expect(c.messages[0].aborted).toBeUndefined();
     expect(c.messages[1].aborted).toBe(true);
@@ -141,10 +122,10 @@ describe('SessionIndex (per-tenant session map)', () => {
     let idx = emptySessionIndex();
     idx = setTenantConv(idx, 'example-corp|staging', 10, 'conv-a-stg');
     idx = setTenantConv(idx, 'example-corp|production', 20, 'conv-a-prod');
-    idx = setTenantConv(idx, 'globex|staging', 30, 'conv-g-stg');
+    idx = setTenantConv(idx, 'example-partners|staging', 30, 'conv-g-stg');
     expect(tenantConv(idx, 'example-corp|staging')).toBe('conv-a-stg');
     expect(tenantConv(idx, 'example-corp|production')).toBe('conv-a-prod');
-    expect(tenantConv(idx, 'globex|staging')).toBe('conv-g-stg');
+    expect(tenantConv(idx, 'example-partners|staging')).toBe('conv-g-stg');
   });
   it('removing a tab keeps the tenant conversation (many-tabs -> one-session)', () => {
     let idx = setTenantConv(
@@ -170,21 +151,6 @@ describe('SessionIndex (per-tenant session map)', () => {
     expect(tabSessionKey(idx, 11)).toBe('example-corp|staging#11');
     expect(tenantConv(idx, 'example-corp|staging#11')).toBe('conv-a11');
   });
-  it('migrates an old TabIndex to per-tab compound keys (reachable by the live path)', () => {
-    // #166 G: the live path reads byTenant ONLY by the compound "tenant|env#tabId"
-    // key (tabConvKey). Migration must produce that shape too, else a migrated conv
-    // is never matched (silently dropped) and a stale bare key orphans in byTenant.
-    const idx = sessionIndexFromTabIndex([
-      { tabId: 5, sessionKey: 'example-corp|staging', convId: 'conv-old-5' },
-      { tabId: 7, sessionKey: 'globex|production', convId: 'conv-old-7' },
-    ]);
-    // Reachable under the SAME compound key the live path computes.
-    expect(tenantConv(idx, tabConvKey('example-corp|staging', 5))).toBe('conv-old-5');
-    expect(tenantConv(idx, tabConvKey('globex|production', 7))).toBe('conv-old-7');
-    // No bare key leaks into byTenant.
-    expect(tenantConv(idx, 'example-corp|staging')).toBeUndefined();
-    expect(tabSessionKey(idx, 5)).toBe(tabConvKey('example-corp|staging', 5));
-  });
   it('removeTabSession tolerates the compound key and keeps a conv shared by another live tab', () => {
     // Two tabs of one tenant, distinct compound keys but the SAME shared convId.
     let idx = setTenantConv(emptySessionIndex(), tabConvKey('example-corp|staging', 5), 5, 'conv-shared');
@@ -194,22 +160,5 @@ describe('SessionIndex (per-tenant session map)', () => {
     expect(tabSessionKey(idx, 5)).toBeUndefined();
     expect(tenantConv(idx, tabConvKey('example-corp|staging', 5))).toBeUndefined(); // tab 5's key pruned
     expect(tabSessionKey(idx, 6)).toBe('example-corp|staging#5-alias'); // tab 6 untouched
-  });
-});
-
-describe('TabIndex (per-tab session map)', () => {
-  it('maps a tab id to a conversation id immutably', () => {
-    const a = emptyTabIndex();
-    const b = setTabConv(a, 7, 'conv-7');
-    expect(tabConv(b, 7)).toBe('conv-7');
-    expect(tabConv(a, 7)).toBeUndefined(); // original unchanged
-  });
-  it('removes a tab and returns the conversation it pointed at', () => {
-    const idx = setTabConv(setTabConv(emptyTabIndex(), 7, 'conv-7'), 8, 'conv-8');
-    const { index, removedConv } = removeTab(idx, 7);
-    expect(removedConv).toBe('conv-7');
-    expect(tabConv(index, 7)).toBeUndefined();
-    expect(tabConv(index, 8)).toBe('conv-8');
-    expect(removeTab(index, 99).removedConv).toBeUndefined();
   });
 });

@@ -28,8 +28,11 @@ import { INTERACTION_MODES } from './chat-protocol';
  *        host_tool_result / host_tool_cancel) — the agent invokes tools that must
  *        run inside the host UI (e.g. an Office task pane) over the WS bridge,
  *        mirroring the stdio RPC host-tool vocabulary. set_host_tools_error nacks
- *        a bad registration so a client awaiting the ack doesn't hang. */
-export const CONTRACT_VERSION = '1.8.0';
+ *        a bad registration so a client awaiting the ack doesn't hang.
+ * 2.0.0: clean break — removes credential/login diagnostics, requires per-tab
+ *        tenant routing and complete bridge identity frames, and replaces raw
+ *        chat errors with required machine-readable reasons. */
+export const CONTRACT_VERSION = '2.0.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -77,12 +80,6 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
     summary: 'Navigate the console tab to a scoped https URL.',
     category: 'navigation',
     params: Type.Object({ url: Type.String() }),
-  },
-  {
-    name: 'login',
-    summary: 'Drive the F5 XC OIDC/Keycloak login end-to-end (production + staging consoles).',
-    category: 'navigation',
-    params: Type.Object({ email: Type.String(), password: Type.String(), consoleUrl: Type.String() }),
   },
   {
     name: 'scroll_to',
@@ -227,7 +224,7 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   },
   {
     name: 'diag_bridges',
-    summary: 'List discovered xcsh bridges (port, tenant, env, sessionId, lastSeen) for multi-session diagnostics.',
+    summary: 'List discovered xcsh bridge health without tenant, environment, or session identifiers.',
     category: 'read',
     params: empty,
   },
@@ -240,12 +237,6 @@ const BASE_TOOLS: readonly Omit<ToolDef, 'flags'>[] = [
   {
     name: 'diag_ttft',
     summary: 'Diagnostic: init→first-token timeline (per-stage ms, total, dominant, cold/warm).',
-    category: 'read',
-    params: empty,
-  },
-  {
-    name: 'capture_login_flow',
-    summary: 'Diagnostic: captured login redirect chain annotated with tenant/env (Phase 0b).',
     category: 'read',
     params: empty,
   },
@@ -321,7 +312,6 @@ const READ_ONLY = new Set([
 const MUTATING = new Set([
   'set_bridge_port',
   'navigate',
-  'login',
   'scroll_to',
   'resize_window',
   'tabs_create',

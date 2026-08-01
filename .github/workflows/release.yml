@@ -54,17 +54,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install semantic-release toolchain
-        run: >
-          npm install --no-save
-          semantic-release
-          @semantic-release/commit-analyzer
-          @semantic-release/release-notes-generator
-          @semantic-release/exec
-          @semantic-release/github
-
       - name: Run semantic-release
-        run: npx semantic-release
+        run: bun run semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           # Chrome Web Store API credentials (read by chrome-webstore-upload-cli).

@@ -18,7 +18,6 @@ const EXPECTED_TOOLS = [
   'reload',
   'debug_exec',
   'navigate',
-  'login',
   'select_option',
   'scroll_to',
   'get_page_text',
@@ -33,7 +32,6 @@ const EXPECTED_TOOLS = [
   'diag_bridges',
   'diag_activation',
   'diag_ttft',
-  'capture_login_flow',
   'wait_for_api_response',
   'file_upload',
   'browser_batch',
@@ -81,6 +79,18 @@ describe('capabilities — tool descriptors', () => {
     expect(getToolDef('click')?.name).toBe('click');
     expect(getToolDef('does_not_exist')).toBeUndefined();
   });
+
+  it('does not expose credential-taking or login-flow diagnostic tools', () => {
+    expect(getToolDef('login')).toBeUndefined();
+    expect(getToolDef('capture_login_flow')).toBeUndefined();
+    expect(JSON.stringify(buildCapabilities('0.0.0'))).not.toMatch(/"(?:email|password|credentials)"/i);
+  });
+
+  it('describes bridge diagnostics as identity-free health data', () => {
+    expect(getToolDef('diag_bridges')?.summary).toBe(
+      'List discovered xcsh bridge health without tenant, environment, or session identifiers.',
+    );
+  });
 });
 
 describe('capabilities — param validation', () => {
@@ -115,8 +125,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 1.8.0 (additive host-tool channel)', () => {
-    expect(CONTRACT_VERSION).toBe('1.8.0');
+  it('CONTRACT_VERSION is 2.0.0 (PII-safe clean break)', () => {
+    expect(CONTRACT_VERSION).toBe('2.0.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {
