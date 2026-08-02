@@ -9,11 +9,12 @@
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 import { bridgeHello, dispatchBridgeFrame } from '../src/bridge-transport';
+import { CONTRACT_VERSION } from '../src/capabilities';
 
 // ── unit: the hello frame the extension sends on connect ────────────────────
 describe('bridgeHello', () => {
-  it('carries the contract version and extension id', () => {
-    expect(bridgeHello('1.4.0', 'abcxyz')).toEqual({ type: 'hello', contractVersion: '1.4.0', extensionId: 'abcxyz' });
+  it('fixes the production contract version and carries the extension id', () => {
+    expect(bridgeHello('abcxyz')).toEqual({ type: 'hello', contractVersion: CONTRACT_VERSION, extensionId: 'abcxyz' });
   });
 });
 
@@ -101,7 +102,7 @@ describe('bridge transport over a real WebSocket', () => {
                 tenant: 'example-corp',
                 env: 'staging',
                 contextBound: true,
-                contractVersion: '9.9.9',
+                contractVersion: CONTRACT_VERSION,
               }),
             );
             ws.send(JSON.stringify({ type: 'ping' }));
@@ -114,7 +115,7 @@ describe('bridge transport over a real WebSocket', () => {
     const dispatched: Array<[string, unknown]> = [];
     const done = new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://localhost:${server?.port}`);
-      ws.onopen = () => ws.send(JSON.stringify(bridgeHello('9.9.9', 'ext-id-123')));
+      ws.onopen = () => ws.send(JSON.stringify(bridgeHello('ext-id-123')));
       ws.onmessage = (ev) => {
         dispatchBridgeFrame(JSON.parse(String((ev as MessageEvent).data)), {
           onPing: () => ws.send(JSON.stringify({ type: 'pong' })), // client answers ping
@@ -136,7 +137,7 @@ describe('bridge transport over a real WebSocket', () => {
     // The server received the client's hello with the exact contract + id.
     expect(received.find((m) => m.type === 'hello')).toEqual({
       type: 'hello',
-      contractVersion: '9.9.9',
+      contractVersion: CONTRACT_VERSION,
       extensionId: 'ext-id-123',
     });
     // The client answered the server's ping with a pong (real round-trip).

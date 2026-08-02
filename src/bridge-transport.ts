@@ -6,15 +6,14 @@
  * owns the socket lifecycle (connect, reconnect, registry) and injects the
  * effectful handlers; this module is the pure protocol seam between them.
  */
+
+import { CONTRACT_VERSION } from './capabilities';
 import { type ChatInbound, isChatInbound, isSkillsList, type SkillsListMsg } from './chat-protocol';
 
 /** The handshake frame the extension sends immediately on opening a bridge
  *  socket. The bridge replies with `hello_ack`. */
-export function bridgeHello(
-  contractVersion: string,
-  extensionId: string,
-): { type: 'hello'; contractVersion: string; extensionId: string } {
-  return { type: 'hello', contractVersion, extensionId };
+export function bridgeHello(extensionId: string): { type: 'hello'; contractVersion: string; extensionId: string } {
+  return { type: 'hello', contractVersion: CONTRACT_VERSION, extensionId };
 }
 
 /** Effect handlers the SW supplies for each inbound bridge frame type. All

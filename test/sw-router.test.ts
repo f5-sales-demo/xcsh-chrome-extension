@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   classifyProbe,
+  type HelloAckLike,
   planChatRequest,
   planHelloAck,
   planReprovision,
@@ -115,36 +116,89 @@ describe('planToolRequest', () => {
 });
 
 describe('planHelloAck', () => {
-  test('ignores a frame with no string sessionId (not a real hello_ack)', () => {
-    expect(planHelloAck({ tenant: 'example-corp', env: 'staging' }, '1.0.0')).toEqual({ kind: 'ignore' });
+  test('rejects a frame with no string sessionId', () => {
+    expect(planHelloAck({ type: 'hello_ack', tenant: 'example-corp', env: 'staging' })).toEqual({ kind: 'reject' });
   });
   test('rejects a major contract-version mismatch', () => {
-    expect(planHelloAck({ sessionId: 'tab-1', contractVersion: '2.3.0' }, '1.0.0')).toEqual({ kind: 'reject' });
+    expect(
+      planHelloAck({
+        type: 'hello_ack',
+        sessionId: 'tab-1',
+        contractVersion: '1.9.0',
+        tenant: null,
+        env: null,
+        contextBound: false,
+      }),
+    ).toEqual({ kind: 'reject' });
   });
   test('accepts a compatible frame, carrying the identity fields', () => {
     expect(
-      planHelloAck(
-        { sessionId: 'tab-1', tenant: 'example-corp', env: 'staging', contextBound: true, contractVersion: '1.9.0' },
-        '1.0.0',
-      ),
+      planHelloAck({
+        type: 'hello_ack',
+        sessionId: 'tab-1',
+        tenant: 'example-corp',
+        env: 'staging',
+        contextBound: true,
+        contractVersion: '2.9.0',
+      }),
     ).toEqual({ kind: 'accept', sessionId: 'tab-1', tenant: 'example-corp', env: 'staging', contextBound: true });
   });
   test('rejects missing contract fields and invalid identity types', () => {
-    expect(planHelloAck({ sessionId: 'spare', tenant: null, env: null, contextBound: false }, '1.0.0')).toEqual({
+    expect(
+      planHelloAck({ type: 'hello_ack', sessionId: 'spare', tenant: null, env: null, contextBound: false }),
+    ).toEqual({
       kind: 'reject',
     });
     expect(
-      planHelloAck(
-        {
-          sessionId: 'tab-1',
-          tenant: 'example-corp',
-          env: 'production',
-          contextBound: 'yes',
-          contractVersion: '1.0.0',
-        },
-        '1.0.0',
-      ),
+      planHelloAck({
+        type: 'hello_ack',
+        sessionId: 'tab-1',
+        tenant: 'example-corp',
+        env: 'production',
+        contextBound: 'yes',
+        contractVersion: '2.0.0',
+      }),
     ).toEqual({ kind: 'reject' });
+  });
+  test('rejects obsolete or unexpected identity fields', () => {
+    expect(
+      planHelloAck({
+        type: 'hello_ack',
+        sessionId: 'tab-1',
+        tenant: 'example-corp',
+        env: 'staging',
+        contextBound: true,
+        contractVersion: '2.0.0',
+        apiUrl: 'https://example.com',
+      } as HelloAckLike),
+    ).toEqual({ kind: 'reject' });
+  });
+  test.each([
+    { tenant: 'example-corp', env: null, contextBound: false },
+    { tenant: null, env: 'staging', contextBound: false },
+    { tenant: '', env: 'staging', contextBound: false },
+    { tenant: null, env: null, contextBound: true },
+  ])('rejects an incomplete identity: %j', (identity) => {
+    expect(
+      planHelloAck({
+        type: 'hello_ack',
+        sessionId: 'tab-1',
+        contractVersion: '2.0.0',
+        ...identity,
+      }),
+    ).toEqual({ kind: 'reject' });
+  });
+  test('accepts a complete versioned tenant-change identity', () => {
+    expect(
+      planHelloAck({
+        type: 'tenant_changed',
+        sessionId: 'tab-2',
+        tenant: null,
+        env: null,
+        contextBound: false,
+        contractVersion: '2.0.0',
+      }),
+    ).toEqual({ kind: 'accept', sessionId: 'tab-2', tenant: null, env: null, contextBound: false });
   });
 });
 

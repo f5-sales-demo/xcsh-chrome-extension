@@ -1,5 +1,8 @@
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
+/** Bun's real network client, retained before happy-dom installs its DOM WebSocket. */
+export const NativeWebSocket = globalThis.WebSocket;
+
 GlobalRegistrator.register();
 
 // Re-bind the `screen` singleton after registration. @testing-library/dom binds

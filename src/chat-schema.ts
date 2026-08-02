@@ -142,7 +142,7 @@ export const SetHostToolsAckSchema = Type.Object({
 
 export const SetHostToolsErrorSchema = Type.Object({
   type: Type.Literal('set_host_tools_error'),
-  error: Type.String(),
+  reason: Type.Literal('host-tools-rejected'),
 });
 
 export const HostToolCallSchema = Type.Object({
@@ -263,7 +263,7 @@ const setHostTools: SetHostToolsMsg = {
 const setHostToolsAck: SetHostToolsAckMsg = { type: 'set_host_tools_ack', toolNames: ['office_read_range'] };
 const setHostToolsError: SetHostToolsErrorMsg = {
   type: 'set_host_tools_error',
-  error: 'Host tool "office_read_range" must provide a non-empty description',
+  reason: 'host-tools-rejected',
 };
 const hostToolCall: HostToolCallMsg = {
   type: 'host_tool_call',

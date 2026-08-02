@@ -16,7 +16,7 @@ import {
   stalePorts,
 } from './bridge-discovery';
 import { bridgeHello, dispatchBridgeFrame } from './bridge-transport';
-import { buildCapabilities, CONTRACT_VERSION, getToolDef, toolNames } from './capabilities';
+import { buildCapabilities, getToolDef, toolNames } from './capabilities';
 import type { ChatErrorReason } from './chat-protocol';
 import { type AxLike, buildContextSnapshot, type RawApiCapture } from './context-snapshot';
 import {
@@ -36,7 +36,6 @@ import { runDispatch } from './dispatch';
 import { publicRuntimeError } from './runtime-errors';
 import { contextTabFor, portForTab, sidForTab } from './session-routing';
 import { SkillsWaiters } from './skills-waiters';
-import { obsoleteLocalStorageKeys } from './storage-hygiene';
 import {
   planChatRequest,
   planHelloAck,
@@ -322,15 +321,6 @@ function recordSpan(
 // Per-tab cold-start provision tracking (provision→register duration + cold flag),
 // reaped on tab close. See ttft-provision.ts for the pure state machine.
 const prov = newProvisionState();
-// Delete former chat and identity-capable diagnostic storage as a clean break;
-// values are never read or migrated. Load only the new metric-only history.
-chrome.storage.local
-  .get(null)
-  .then((stored) => {
-    const obsolete = obsoleteLocalStorageKeys(Object.keys(stored));
-    if (obsolete.length) return chrome.storage.local.remove(obsolete);
-  })
-  .catch(() => {});
 chrome.storage.local
   .get([DIAG_KEY, DIAG_NOISE_KEY])
   .then((r) => {
@@ -665,7 +655,7 @@ function connectPort(port: number): void {
       lastActivityTs = Date.now();
       recordDiag('ws_open', { port });
       try {
-        sock.send(JSON.stringify(bridgeHello(CONTRACT_VERSION, chrome.runtime.id)));
+        sock.send(JSON.stringify(bridgeHello(chrome.runtime.id)));
       } catch {
         /* socket may have dropped immediately */
       }
@@ -745,8 +735,7 @@ function onMessage(msg: any, sourcePort: number): void {
 
     // Identity handshake reply — record which tenant this bridge (port) serves.
     onIdentity: (frame) => {
-      const plan = planHelloAck(frame, CONTRACT_VERSION);
-      if (plan.kind === 'ignore') return; // not a real xcsh hello_ack (no string sessionId)
+      const plan = planHelloAck(frame);
       if (plan.kind === 'reject') {
         // Major contract mismatch — close and forget this socket rather than trust it.
         try {
