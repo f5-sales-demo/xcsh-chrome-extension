@@ -4,7 +4,6 @@ import {
   DIAG_STORAGE_KEYS,
   gateBlockEvidence,
   isNoiseKind,
-  LEGACY_DIAG_STORAGE_KEYS,
   maxGap,
   publicBridgeDiagnostics,
   pushCapped,
@@ -82,11 +81,8 @@ describe('PII-safe diagnostics', () => {
     expect(JSON.stringify(rows)).not.toContain('tab-7');
   });
 
-  it('uses new metric-only storage keys and explicitly retires the legacy keys', () => {
+  it('uses only metric-only storage keys', () => {
     expect(DIAG_STORAGE_KEYS).toEqual(['xcsh.diag.metrics.v2', 'xcsh.diag.noise.v2']);
-    expect(LEGACY_DIAG_STORAGE_KEYS).toEqual(['xcsh.diag.suspension', 'xcsh.diag.noise']);
-    const retired = new Set<string>(LEGACY_DIAG_STORAGE_KEYS);
-    expect(DIAG_STORAGE_KEYS.some((key) => retired.has(key))).toBe(false);
   });
 });
 

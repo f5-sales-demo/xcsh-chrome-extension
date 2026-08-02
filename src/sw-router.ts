@@ -8,6 +8,8 @@
  * seam the earlier regression slipped through. Effects, timers, Date.now(), and
  * chrome APIs stay in the SW; nothing here touches them.
  */
+
+import { CONTRACT_VERSION } from './capabilities';
 import type { ChatErrorReason } from './chat-protocol';
 import { type BridgeLike, resolveChatPort, resolveToolTab, sidForTab, staleTabPorts } from './session-routing';
 
@@ -95,6 +97,7 @@ export function planToolRequest(sourcePort: number | undefined, portToTab: Map<n
 }
 
 export interface HelloAckLike {
+  type?: unknown;
   sessionId?: unknown;
   tenant?: unknown;
   env?: unknown;
@@ -103,22 +106,26 @@ export interface HelloAckLike {
 }
 
 export type HelloAckPlan =
-  | { kind: 'ignore' }
   | { kind: 'reject' }
   | { kind: 'accept'; tenant: string | null; env: string | null; sessionId: string; contextBound: boolean };
 
 /** Accept only a complete, version-compatible identity frame. */
-export function planHelloAck(msg: HelloAckLike, ownContractVersion: string): HelloAckPlan {
-  if (typeof msg.sessionId !== 'string') return { kind: 'ignore' };
-  if (
-    typeof msg.contractVersion !== 'string' ||
-    msg.contractVersion.split('.')[0] !== ownContractVersion.split('.')[0]
-  ) {
+export function planHelloAck(msg: HelloAckLike): HelloAckPlan {
+  const allowedFields = new Set(['type', 'sessionId', 'tenant', 'env', 'contextBound', 'contractVersion']);
+  const fields = Object.keys(msg);
+  if (fields.length !== allowedFields.size || fields.some((field) => !allowedFields.has(field))) {
+    return { kind: 'reject' };
+  }
+  if (msg.type !== 'hello_ack' && msg.type !== 'tenant_changed') return { kind: 'reject' };
+  if (typeof msg.sessionId !== 'string' || msg.sessionId.length === 0) return { kind: 'reject' };
+  if (typeof msg.contractVersion !== 'string' || msg.contractVersion.split('.')[0] !== CONTRACT_VERSION.split('.')[0]) {
     return { kind: 'reject' };
   }
   if (typeof msg.contextBound !== 'boolean') return { kind: 'reject' };
-  if (msg.tenant !== null && typeof msg.tenant !== 'string') return { kind: 'reject' };
+  if (msg.tenant !== null && (typeof msg.tenant !== 'string' || msg.tenant.length === 0)) return { kind: 'reject' };
   if (msg.env !== null && msg.env !== 'production' && msg.env !== 'staging') return { kind: 'reject' };
+  if ((msg.tenant === null) !== (msg.env === null)) return { kind: 'reject' };
+  if (msg.contextBound && msg.tenant === null) return { kind: 'reject' };
   return {
     kind: 'accept',
     tenant: (msg.tenant as string | null) ?? null,

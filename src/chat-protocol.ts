@@ -161,7 +161,7 @@ export interface SetHostToolsAckMsg {
  * awaiting registration gets a clear error rather than hanging. */
 export interface SetHostToolsErrorMsg {
   type: 'set_host_tools_error';
-  error: string;
+  reason: 'host-tools-rejected';
 }
 export interface HostToolCallMsg {
   type: 'host_tool_call';

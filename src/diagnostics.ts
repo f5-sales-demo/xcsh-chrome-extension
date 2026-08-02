@@ -17,7 +17,6 @@ export interface DiagEvent {
 }
 
 export const DIAG_STORAGE_KEYS = ['xcsh.diag.metrics.v2', 'xcsh.diag.noise.v2'] as const;
-export const LEGACY_DIAG_STORAGE_KEYS = ['xcsh.diag.suspension', 'xcsh.diag.noise'] as const;
 
 const SAFE_DIAGNOSTIC_STRING_VALUES: Record<string, ReadonlySet<string>> = {
   action: new Set(['bind', 'inactive', 'keep', 'unbind']),
