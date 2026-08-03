@@ -1,3 +1,5 @@
+# xcsh Chrome Extension
+
 🌐 English |
 [日本語](https://f5-sales-demo.github.io/xcsh-chrome-extension/ja/) |
 [한국어](https://f5-sales-demo.github.io/xcsh-chrome-extension/ko/) |
@@ -11,8 +13,6 @@
 [العربية](https://f5-sales-demo.github.io/xcsh-chrome-extension/ar/) |
 [हिन्दी](https://f5-sales-demo.github.io/xcsh-chrome-extension/hi/) |
 [ไทย](https://f5-sales-demo.github.io/xcsh-chrome-extension/th/)
-
-# xcsh Chrome Extension
 
 [![GitHub Pages Deploy](https://github.com/f5-sales-demo/xcsh-chrome-extension/actions/workflows/github-pages-deploy.yml/badge.svg)](https://github.com/f5-sales-demo/xcsh-chrome-extension/actions/workflows/github-pages-deploy.yml)
 [![Repository Settings](https://github.com/f5-sales-demo/xcsh-chrome-extension/actions/workflows/enforce-repo-settings.yml/badge.svg)](https://github.com/f5-sales-demo/xcsh-chrome-extension/actions/workflows/enforce-repo-settings.yml)
