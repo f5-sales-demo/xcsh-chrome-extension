@@ -22,7 +22,7 @@ Chrome extension companion for the xcsh AI-powered F5 Distributed Cloud CLI
 
 ## Documentation
 
-Full documentation is available at **[https://f5-sales-demo.github.io/xcsh-chrome-extension/](https://f5-sales-demo.github.io/xcsh-chrome-extension/)**.
+Full documentation is available at __[https://f5-sales-demo.github.io/xcsh-chrome-extension/](https://f5-sales-demo.github.io/xcsh-chrome-extension/)__.
 
 ## Contributing
 
