@@ -69,6 +69,25 @@ describe('planOverlay', () => {
       expect(plan.anims.length).toBeGreaterThan(0);
       expect(plan.ttlMs).toBeGreaterThanOrEqual(plan.anims[0].timing.duration);
     });
+
+    it('escapes variable text while keeping the generated callout markup intact', () => {
+      const text = '<img src=x onerror="globalThis.pwned=true"> & goodbye </div><script>pwned()</script>';
+      const plan = planOverlay({ kind: 'callout', x: 200, y: 100, text });
+      expect(plan).not.toBeNull();
+      if (!plan) return;
+
+      // planOverlay owns the wrapper markup; caller-controlled text is encoded
+      // before mountOverlay supplies the completed plan to Preact's HTML sink.
+      expect(plan.html).toContain('&lt;img src=x onerror="globalThis.pwned=true"&gt;');
+      expect(plan.html).toContain('&amp; goodbye &lt;/div&gt;&lt;script&gt;pwned()&lt;/script&gt;');
+
+      const { document } = parseHTML(`<!doctype html><html><body>${plan.html}</body></html>`);
+      const callout = document.querySelector('.callout');
+      expect(callout).not.toBeNull();
+      expect(callout?.textContent).toBe(text);
+      expect(callout?.querySelector('img')).toBeNull();
+      expect(callout?.querySelector('script')).toBeNull();
+    });
   });
 });
 
