@@ -24,9 +24,11 @@ Install the **xcsh Chrome Extension** from the Chrome Web Store, then connect th
 2. **Add it to Chrome.** Click **Add to Chrome**, then confirm **Add extension**.
 
 3. **Verify the extension ID.** Open `chrome://extensions`, enable **Developer mode** (top-right toggle), and confirm the xcsh card shows the ID:
-   ```
+
+   ```text
    klajkjdoehjidngligegnpknogmjjhkc
    ```
+
    This is the fixed ID the native-messaging bridge expects.
 
 </Steps>
@@ -36,6 +38,7 @@ Install the **xcsh Chrome Extension** from the Chrome Web Store, then connect th
 <Steps>
 
 1. **Run the setup command** to register the native-messaging host:
+
    ```bash
    xcsh chrome setup
    ```
@@ -57,9 +60,11 @@ Working on the extension itself? Build a keyed unpacked copy that loads under th
 <Steps>
 
 1. **Build a dev copy:**
+
    ```bash
    bun run build:dev
    ```
+
    This builds `dist/` and injects the store's public `key`, pinning the unpacked ID to `klajkjdoehjidngligegnpknogmjjhkc` (the same ID store users get).
 
 2. **Load it.** At `chrome://extensions` (Developer mode on), click **Load unpacked** and select the `dist/` folder. Confirm the ID matches the canonical ID above.
@@ -72,4 +77,4 @@ Working on the extension itself? Build a keyed unpacked copy that loads under th
 Remove the Chrome Web Store copy first if it is installed — Chrome will not load two extensions that share the same ID.
 :::
 
-<!-- Linked-issue verification marker: #588. -->
+{/*Linked-issue verification marker: #588.*/}
