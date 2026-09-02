@@ -2,7 +2,14 @@ import { describe, expect, it } from 'bun:test';
 import { fireEvent, render } from '@testing-library/preact';
 import { newConversation } from '../../src/references-store';
 import { convToMessages } from '../../src/side-panel/adapt';
-import { AssistantMessage, ErrorMessage, ToolMessage, Transcript, UserMessage } from '../../src/vendor/chat-ui';
+import {
+  AssistantMessage,
+  ErrorMessage,
+  PANEL_CSS,
+  ToolMessage,
+  Transcript,
+  UserMessage,
+} from '../../src/vendor/chat-ui';
 
 // These render the VENDORED shared message components under preact/compat — the
 // Phase-5 interop regression proof (the components themselves are unit-tested at
@@ -12,6 +19,47 @@ describe('transcript messages', () => {
     const { container } = render(<AssistantMessage text="**bold**" />);
     expect(container.querySelector('strong')?.textContent).toBe('bold');
     expect(container.querySelector('.gutter')?.textContent).toBe('●');
+  });
+
+  it('renders supported LaTeX as semantic MathML', () => {
+    const { container } = render(<AssistantMessage text={'$$I \\propto \\frac{1}{\\lambda^4}$$'} />);
+    // happy-dom drops the MathML root while parsing DOMPurify output; the real
+    // browser UAT below verifies the root and display attribute.
+    const mathBody = container.querySelector('mrow');
+
+    expect(mathBody).not.toBeNull();
+    expect(mathBody?.querySelector('mfrac')).not.toBeNull();
+    expect(mathBody?.textContent).toContain('∝');
+    expect(mathBody?.textContent).toContain('λ');
+    expect(container.textContent).not.toContain('\\frac');
+  });
+
+  it('keeps false positives and unsafe LaTeX literal', () => {
+    const literal = 'Pay $5; use $HOME or $' + '{PATH}; run `$x$`.';
+    const safe = render(<AssistantMessage text={literal} />);
+    expect(safe.container.querySelector('math')).toBeNull();
+    expect(safe.container.textContent).toContain('$HOME');
+    expect(safe.container.textContent).toContain('$' + '{PATH}');
+    expect(safe.container.querySelector('code')?.textContent).toBe('$x$');
+    safe.unmount();
+
+    for (const source of [
+      '$$\\frac{1}{',
+      '$$\\unsupported{x}$$',
+      '$$\\includegraphics{https://example.invalid/x.png}$$',
+      '$$\\class{evil}{x}$$',
+    ]) {
+      const hostile = render(<AssistantMessage text={source} />);
+      expect(hostile.container.textContent).toContain(source);
+      expect(hostile.container.querySelector('math')).toBeNull();
+      expect(hostile.container.querySelector('img, a, style, button')).toBeNull();
+      hostile.unmount();
+    }
+  });
+
+  it('bundles the scoped Temml fallback font without network URLs', () => {
+    expect(PANEL_CSS).toContain('data:font/woff2;base64,');
+    expect(PANEL_CSS).not.toMatch(/url\(["']?https?:/);
   });
 
   it('renders the user message as the F5 admonition block (π gutter, italic, never HTML)', () => {
