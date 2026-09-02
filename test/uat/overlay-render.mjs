@@ -159,7 +159,7 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: findChrome(),
     headless: 'new',
-    args: ['--no-first-run', '--no-default-browser-check'],
+    args: ['--no-first-run', '--no-default-browser-check', '--no-sandbox'],
   });
   try {
     const page = await browser.newPage();
@@ -211,6 +211,30 @@ async function main() {
     ok('page chip shows the driven page', /Example Corp Console/.test(s.chip), s.chip);
     await page.screenshot({ path: join(ARTIFACTS, '2-ready.png') });
 
+    // 5. Drive one real assistant turn and verify LaTeX paints as MathML in the
+    // built Chrome side panel (the unit DOM cannot preserve the MathML root).
+    await page.evaluate(() => {
+      const input = document.querySelector('[role="textbox"][aria-label="Message input"]');
+      input.textContent = 'show the proportionality';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.click('button[aria-label="Send"]');
+    await page.waitForFunction(() => globalThis.__xcsh.posted.some((m) => m?.type === 'chat_request'));
+    const chatId = await page.evaluate(
+      () => [...globalThis.__xcsh.posted].reverse().find((m) => m?.type === 'chat_request')?.id,
+    );
+    ok('composer posts a chat request for the formula turn', typeof chatId === 'string');
+    await push(page, { type: 'chat_delta', id: chatId, seq: 0, delta: '$$I \\propto \\frac{1}{\\lambda^4}$$' });
+    await page.waitForSelector('.markdown-root math[display="block"] mfrac', { timeout: 3000 });
+    const formula = await page.$eval('.markdown-root math[display="block"]', (el) => ({
+      text: el.textContent,
+      raw: el.parentElement?.textContent ?? '',
+    }));
+    ok('assistant LaTeX paints semantic display MathML', /I/.test(formula.text) && /∝/.test(formula.text) && /λ/.test(formula.text));
+    ok('supported formula hides raw LaTeX commands', !formula.raw.includes('\\frac') && !formula.raw.includes('\\lambda'));
+    await push(page, { type: 'chat_done', id: chatId, references: [] });
+    await page.screenshot({ path: join(ARTIFACTS, '3-math.png') });
+
     // (The reqId negative path — a stale snapshot for a superseded run is ignored —
     // is exhaustively covered deterministically in the bun activation UAT.)
 
@@ -226,7 +250,7 @@ async function main() {
         'blocked render: "xcsh didn\'t start" + Retry (~15s)',
         await waitFor(p2, (s) => /didn.t start/i.test(s.overlayText) && s.retry, 17000),
       );
-      await p2.screenshot({ path: join(ARTIFACTS, '3-blocked.png') });
+      await p2.screenshot({ path: join(ARTIFACTS, '4-blocked.png') });
       await p2.close();
 
       const p3 = await browser.newPage();
@@ -238,7 +262,7 @@ async function main() {
         'disconnected render: "xcsh not connected" + Retry (~10s)',
         await waitFor(p3, (s) => /not connected/i.test(s.overlayText) && s.retry, 12000),
       );
-      await p3.screenshot({ path: join(ARTIFACTS, '4-disconnected.png') });
+      await p3.screenshot({ path: join(ARTIFACTS, '5-disconnected.png') });
       await p3.close();
     }
   } finally {

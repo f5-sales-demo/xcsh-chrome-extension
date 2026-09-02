@@ -13,7 +13,9 @@
  * background, `--pure-white` for crisp white on the F5-red fills). No color
  * literals remain in this stylesheet.
  */
-export const PANEL_CSS = `
+import { TEMML_CSS } from "../markdown/temml-css.generated";
+
+export const PANEL_CSS = `${TEMML_CSS}
 * { box-sizing: border-box; }
 html,body { margin:0; height:100%; }
 body { background: var(--charcoal); color: var(--bright-white);
@@ -124,6 +126,10 @@ code { background:var(--code-bg); padding:1px 5px; border-radius:4px; overflow-w
   background: var(--f5-red); animation: caret-blink 1s step-end infinite; }
 @keyframes caret-blink { 50% { opacity:0 } }
 @media (prefers-reduced-motion: reduce) { .stream-caret { animation:none } }
+.chat-media { margin:10px 0 4px; }
+.chat-media-asset { display:block; max-width:100%; max-height:360px; border-radius:6px; object-fit:contain; }
+.chat-media-text { margin:0; padding:10px; overflow:auto; background:var(--code-bg); border:1px solid var(--subtle-gray); }
+.chat-media figcaption, .chat-media-degradation { margin-top:4px; color:var(--cool-gray); font-size:12px; }
 .body.error .msg-retry { margin-left:8px; background:transparent; color: var(--f5-red); border:1px solid var(--f5-red);
   border-radius:6px; padding:1px 8px; cursor:pointer; font:inherit; font-size:0.85em; vertical-align:baseline; }
 

@@ -27,19 +27,26 @@ function findChrome() {
   const sys = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   if (existsSync(sys)) return sys;
   const base = join(process.env.HOME, '.cache', 'puppeteer', 'chrome');
-  const dirs = existsSync(base) ? readdirSync(base).filter((d) => d.startsWith('mac')) : [];
-  const cft =
-    dirs.at(-1) &&
+  const dirs = existsSync(base)
+    ? readdirSync(base)
+        .filter((d) => /^(mac|linux|win)/.test(d))
+        .sort()
+    : [];
+  const latest = dirs.at(-1);
+  const mac =
+    latest &&
     join(
       base,
-      dirs.at(-1),
+      latest,
       'chrome-mac-arm64',
       'Google Chrome for Testing.app',
       'Contents',
       'MacOS',
       'Google Chrome for Testing',
     );
-  if (cft && existsSync(cft)) return cft;
+  if (mac && existsSync(mac)) return mac;
+  const linux = latest && join(base, latest, 'chrome-linux64', 'chrome');
+  if (linux && existsSync(linux)) return linux;
   throw new Error('no Chrome; set CHROME_BIN');
 }
 
