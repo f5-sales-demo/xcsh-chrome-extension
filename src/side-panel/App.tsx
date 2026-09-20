@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'preact/hooks';
 import type { InteractionMode } from '../chat-protocol';
 import type { AttachCategory, ComposerHandle, SlashCommand } from '../vendor/chat-ui';
-import { ActivationOverlay, Composer, ContextChip, Transcript } from '../vendor/chat-ui';
+import { ActivationOverlay, Composer, ContextChip, InteractionPanel, Transcript } from '../vendor/chat-ui';
 import { activationToGates, convToMessages, MODES, overlayBlocked } from './adapt';
 import { inputLocked, overlayVisible } from './state';
 import { usePanel } from './use-panel';
@@ -53,6 +53,9 @@ export function App() {
         disconnectedTitle="bridge offline"
       />
       <Transcript messages={convToMessages(s.conv)} streaming={streaming} onRetry={p.resendMessage} />
+      {s.activation.phase === 'ready' ? (
+        <InteractionPanel key={s.activation.runId} transport={p.interactionTransport} />
+      ) : null}
       <Composer
         ref={composerRef}
         disabled={inputLocked(s)}

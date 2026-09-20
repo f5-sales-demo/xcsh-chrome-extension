@@ -15,6 +15,8 @@ import {
   type ChatDoneMsg,
   type ChatErrorMsg,
   type ChatKeepaliveMsg,
+  type ChatMessageEndMsg,
+  type ChatMessageStartMsg,
   type ChatRequestMsg,
   type ChatStopMsg,
   type ChatToolNoticeMsg,
@@ -84,8 +86,23 @@ export const ChatStopSchema = Type.Object({
 export const ChatDeltaSchema = Type.Object({
   type: Type.Literal('chat_delta'),
   id: ChatId,
+  itemId: Type.String({ minLength: 1 }),
   seq: Type.Number(),
   delta: Type.String(),
+});
+
+const AssistantMessagePhaseSchema = Type.Union([Type.Literal('commentary'), Type.Literal('final_answer')]);
+export const ChatMessageStartSchema = Type.Object({
+  type: Type.Literal('chat_message_start'),
+  id: ChatId,
+  itemId: Type.String({ minLength: 1 }),
+  phase: AssistantMessagePhaseSchema,
+});
+export const ChatMessageEndSchema = Type.Object({
+  type: Type.Literal('chat_message_end'),
+  id: ChatId,
+  itemId: Type.String({ minLength: 1 }),
+  phase: AssistantMessagePhaseSchema,
 });
 
 export const ChatDoneSchema = Type.Object({
@@ -176,7 +193,9 @@ export const HostToolCancelSchema = Type.Object({
 export const CHAT_SCHEMAS: Record<string, TSchema> = {
   chat_request: ChatRequestSchema,
   chat_stop: ChatStopSchema,
+  chat_message_start: ChatMessageStartSchema,
   chat_delta: ChatDeltaSchema,
+  chat_message_end: ChatMessageEndSchema,
   chat_done: ChatDoneSchema,
   chat_error: ChatErrorSchema,
   chat_tool_notice: ChatToolNoticeSchema,
@@ -232,8 +251,32 @@ const chatRequestNoContext: ChatRequestMsg = {
   sessionKey: 'example-corp|production',
 };
 const chatStop: ChatStopMsg = { type: 'chat_stop', id: 'c-1111' };
-const chatDelta: ChatDeltaMsg = { type: 'chat_delta', id: 'c-1111', seq: 0, delta: 'This LB ' };
-const chatDelta1: ChatDeltaMsg = { type: 'chat_delta', id: 'c-1111', seq: 1, delta: 'routes traffic.' };
+const chatMessageStart: ChatMessageStartMsg = {
+  type: 'chat_message_start',
+  id: 'c-1111',
+  itemId: 'c-1111:assistant:0',
+  phase: 'final_answer',
+};
+const chatDelta: ChatDeltaMsg = {
+  type: 'chat_delta',
+  id: 'c-1111',
+  itemId: 'c-1111:assistant:0',
+  seq: 0,
+  delta: 'This LB ',
+};
+const chatDelta1: ChatDeltaMsg = {
+  type: 'chat_delta',
+  id: 'c-1111',
+  itemId: 'c-1111:assistant:0',
+  seq: 1,
+  delta: 'routes traffic.',
+};
+const chatMessageEnd: ChatMessageEndMsg = {
+  type: 'chat_message_end',
+  id: 'c-1111',
+  itemId: 'c-1111:assistant:0',
+  phase: 'final_answer',
+};
 const chatDone: ChatDoneMsg = {
   type: 'chat_done',
   id: 'c-1111',
@@ -294,8 +337,10 @@ export const CHAT_EXAMPLES = {
     chat_request: chatRequest,
     chat_request_no_context: chatRequestNoContext,
     chat_stop: chatStop,
+    chat_message_start: chatMessageStart,
     chat_delta: chatDelta,
     chat_delta_1: chatDelta1,
+    chat_message_end: chatMessageEnd,
     chat_done: chatDone,
     chat_done_no_refs: chatDoneNoRefs,
     chat_error: chatError,
@@ -352,6 +397,11 @@ export const CHAT_EXAMPLES = {
     },
     { schema: 'chat_error', why: 'missing reason', value: { type: 'chat_error', id: 'c-1' } },
     { schema: 'chat_delta', why: 'missing seq', value: { type: 'chat_delta', id: 'c-1', delta: 'x' } },
+    {
+      schema: 'chat_message_start',
+      why: 'unknown phase',
+      value: { type: 'chat_message_start', id: 'c-1', itemId: 'item', phase: 'thinking' },
+    },
     { schema: 'page_context_snapshot', why: 'wrong version', value: { ...SNAPSHOT_EXAMPLE, v: 2 } },
     {
       schema: 'set_host_tools',

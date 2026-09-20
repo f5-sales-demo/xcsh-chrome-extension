@@ -21,12 +21,19 @@
     "components/ThinkingBlock.tsx": "347afab5dd5883582c73df879ae5095cac5fba49220af852fffbb3556566e493",
     "components/ToolUseContent.tsx": "7501766e302ca04425240758c599228e173dc4b1bda3fa8d63f2109640b481cb",
     "components/ToolsPickerMenu.tsx": "5554bbc32148f21147df8f7bd2ac691220ca6a350fefbebffefd68136ede49eb",
-    "components/Transcript.tsx": "18cefc60f097079a22bd560f6e1629046bd1a19281633f50a3f9ce7445b8b275",
+    "components/Transcript.tsx": "6a75bca8d89ea9c132cbfb14a9fdc198f4b17325db4beff4ab945a6b34e8a951",
     "components/icons.tsx": "14c42dab964dc7372f87e3bb8f9f556eba4332b8aae9f6f58b7f9d9c6040e60e",
-    "components/messages.tsx": "2db6e1fe0ee28eda7413f72307a9591e450d9343dd56df4bcf75bbbede70ab3d",
+    "components/messages.tsx": "ddf1ab3ab2120b1cc4f67430c7c19e8860b70aaae9e6526c6af83820bda17771",
     "components/useAutoClose.ts": "dd2ab2a768fd11fc48cb898f6fef3f9303ed35e492659a97088174cceca9cb76",
     "components/useMenu.ts": "2e4fd072de29c81a2d092690ccac3a001d4d8515c47c798a296a4fa92592c546",
-    "index.ts": "cac1762518df1db0ba76995c58c00bf8668b1afd5e7357bae965503acf69c399",
+    "index.ts": "3fe934b0c8bc9b63b409cf10a464841e8bdd026490dfd712eda003c826aecdea",
+    "interactions/InteractionPanel.tsx": "461ece95cc0ae48039d0eb11d48deef7ff81a2dbb8bd686daae5865c95a25c9b",
+    "interactions/PlanDecision.tsx": "a83011b3ef11b2c328a46d9f278f0e55db62217d458595018be29d904d358e0c",
+    "interactions/QuestionCard.tsx": "8fb2f4064f4d5a9e366407a7867204b512e8bb79ecd69deb46b71561fc27f906",
+    "interactions/contract.ts": "6cca29cbf018c9f4456784a2ae88c38d4b913b3d31be14cb2c45f2b44788ad6b",
+    "interactions/conversation-plan.ts": "935b5fe0cf472dcce8702385e7e026689df3eb73c9fbcd3276e955cb9cac0916",
+    "interactions/question-form.ts": "34c77c8c83ea1c7a9385e69aa73d619071370c3c2fa4e58f274b46b9d795c340",
+    "interactions/transport.ts": "8ff4d469cc857f502d2469070728c4908427726277323a7118e3a67788d9f336",
     "markdown/math.browser.ts": "9f0b58405b79985b41dc8aa0c522e14d1795e5f921186106dfff656e9f2bf16e",
     "markdown/math.ts": "b77469763b8c4e812a5fa0f656b6a4af976688415dd48d02998b2142fd4aeb3d",
     "markdown/render.ts": "9095f6209758abcff496bbf473df230e9bdaa523a7ebcec84037e806e48fafa4",
@@ -39,6 +46,6 @@
     "theme/panel.css.ts": "ed9dec595263bde75d6c52cdf7e75c65e31d83128309d8dcf74c78365abc53c6",
     "theme/tokens.ts": "984bcbece465de277914750c24b0fef6eb8a666801d1bfde19abfd7866dc8bd3",
     "tools/activity-label.ts": "3bee988f6e38037cd1cef7457ed6def75b7f1782b337ac0d1e9968fafc70b743",
-    "types.ts": "291148b57cb0051cb112306620c6321327f5357c73cf1c4254c7a935a028e1c8"
+    "types.ts": "1711884a3062fe9e726e851d8f2e35975c60a02e8bcd3de903ef104d5144cf99"
   }
 }

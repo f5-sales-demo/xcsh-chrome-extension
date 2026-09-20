@@ -43,8 +43,22 @@ export interface ChatRequestMsg {
 export interface ChatDeltaMsg {
   type: 'chat_delta';
   id: string;
+  itemId: string;
   seq: number;
   delta: string;
+}
+export type AssistantMessagePhase = 'commentary' | 'final_answer';
+export interface ChatMessageStartMsg {
+  type: 'chat_message_start';
+  id: string;
+  itemId: string;
+  phase: AssistantMessagePhase;
+}
+export interface ChatMessageEndMsg {
+  type: 'chat_message_end';
+  id: string;
+  itemId: string;
+  phase: AssistantMessagePhase;
 }
 export interface ChatDoneMsg {
   type: 'chat_done';
@@ -61,6 +75,7 @@ export const CHAT_ERROR_REASONS = [
   'session-disposed', // the worker session was torn down
   'token-expired', // F5 XC API token expired
   'token-expiring', // F5 XC API token is about to expire
+  'provider-auth', // upstream provider rejected its credential
   'provider-4xx', // upstream provider rejected the request (client error)
   'provider-5xx', // upstream provider failed (server error) — retryable
 ] as const;
@@ -80,7 +95,7 @@ export interface ChatErrorMsg {
   id: string;
   reason: ChatErrorReason;
 }
-export type ChatStreamMsg = ChatDeltaMsg | ChatDoneMsg | ChatErrorMsg;
+export type ChatStreamMsg = ChatMessageStartMsg | ChatDeltaMsg | ChatMessageEndMsg | ChatDoneMsg | ChatErrorMsg;
 
 export interface ChatStopMsg {
   type: 'chat_stop';
@@ -198,7 +213,7 @@ export interface ChatTurnState {
   text: string;
   status: 'streaming' | 'done' | 'error';
   references: ChatRefWire[];
-  lastSeq: number;
+  itemSeq: Record<string, number>;
 }
 
 /** Shape a chat_request for the bridge. The caller owns id generation. */
@@ -222,16 +237,18 @@ export function buildChatStop(id: string): ChatStopMsg {
 }
 
 export function initChatTurn(id: string): ChatTurnState {
-  return { id, text: '', status: 'streaming', references: [], lastSeq: -1 };
+  return { id, text: '', status: 'streaming', references: [], itemSeq: {} };
 }
 
 /** Fold one inbound stream event into the turn state. Idempotent after terminal. */
 export function reduceChatTurn(state: ChatTurnState, msg: ChatStreamMsg): ChatTurnState {
   if (msg.id !== state.id) return state; // not this turn — ignore
   if (state.status !== 'streaming') return state; // terminal: ignore stragglers
+  if (msg.type === 'chat_message_start' || msg.type === 'chat_message_end') return state;
   if (msg.type === 'chat_delta') {
-    if (msg.seq <= state.lastSeq) return state; // duplicate / out-of-order
-    return { ...state, text: state.text + msg.delta, lastSeq: msg.seq };
+    const lastSeq = state.itemSeq[msg.itemId] ?? -1;
+    if (msg.seq <= lastSeq) return state; // duplicate / out-of-order within one assistant item
+    return { ...state, text: state.text + msg.delta, itemSeq: { ...state.itemSeq, [msg.itemId]: msg.seq } };
   }
   if (msg.type === 'chat_done') {
     return { ...state, status: 'done', references: msg.references ?? [] };
@@ -247,12 +264,33 @@ export function isSkillsList(msg: unknown): msg is SkillsListMsg {
 
 export function isChatInbound(msg: unknown): msg is ChatInbound {
   if (!msg || typeof msg !== 'object') return false;
-  const candidate = msg as { type?: unknown; reason?: unknown };
+  const candidate = msg as {
+    type?: unknown;
+    id?: unknown;
+    itemId?: unknown;
+    phase?: unknown;
+    seq?: unknown;
+    delta?: unknown;
+    reason?: unknown;
+  };
   const t = candidate.type;
   if (t === 'chat_error') {
     return CHAT_ERROR_REASONS.includes(candidate.reason as ChatErrorReason);
   }
-  return (
-    t === 'chat_delta' || t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive'
-  );
+  if (t === 'chat_message_start' || t === 'chat_message_end') {
+    return (
+      typeof candidate.id === 'string' &&
+      typeof candidate.itemId === 'string' &&
+      (candidate.phase === 'commentary' || candidate.phase === 'final_answer')
+    );
+  }
+  if (t === 'chat_delta') {
+    return (
+      typeof candidate.id === 'string' &&
+      typeof candidate.itemId === 'string' &&
+      typeof candidate.seq === 'number' &&
+      typeof candidate.delta === 'string'
+    );
+  }
+  return t === 'chat_done' || t === 'chat_error' || t === 'chat_tool_notice' || t === 'chat_keepalive';
 }

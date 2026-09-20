@@ -1,3 +1,4 @@
+import { isInteractionCommand, isInteractionFrame } from './vendor/chat-ui/interactions/transport';
 /**
  * xcsh service worker — WebSocket bridge client + the 5 tools.
  *
@@ -713,8 +714,21 @@ function sendTo(port: number | undefined, msg: unknown): boolean {
   return false;
 }
 
+const interactionPanels = new Map<chrome.runtime.Port, number>();
 // biome-ignore lint/suspicious/noExplicitAny: bridge message shape
 function onMessage(msg: any, sourcePort: number): void {
+  if (isInteractionFrame(msg)) {
+    for (const [panel, boundPort] of interactionPanels) {
+      if (boundPort === sourcePort) {
+        try {
+          panel.postMessage(msg);
+        } catch {
+          interactionPanels.delete(panel);
+        }
+      }
+    }
+    return;
+  }
   // Frame-type routing lives in bridge-transport (dispatchBridgeFrame), tested end
   // to end over a real socket; the per-type effect handlers below stay here where
   // the SW state lives.
@@ -969,6 +983,18 @@ chrome.runtime.onConnect.addListener((port) => {
   chatPanels.add(port);
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
+    if (isInteractionCommand(m)) {
+      const plan = planSkillsRequest(
+        { tabId: Reflect.get(m, 'tabId'), sessionKey: Reflect.get(m, 'sessionKey') },
+        registry,
+        (p) => sockets.get(p)?.readyState === WebSocket.OPEN,
+      );
+      if (plan.kind === 'skip') return;
+      if (m.type !== 'interaction_snapshot' && interactionPanels.get(port) !== plan.port) return;
+      interactionPanels.set(port, plan.port);
+      sendTo(plan.port, m);
+      return;
+    }
     if (m.type === 'list_skills') {
       // Same tab/tenant resolution as a turn (planSkillsRequest wraps resolveChatPort),
       // so enumeration can never read another tab's or a stale tenant's session.
@@ -1117,6 +1143,7 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
   port.onDisconnect.addListener(() => {
+    interactionPanels.delete(port);
     chatPanels.delete(port);
     skillsWaiters.forgetPanel(port); // the reply may still arrive; deliver to nobody
     for (const [id, p] of turnToPort)

@@ -24,7 +24,8 @@ causes (stop, tab closed, no first token).
 | `session-disposed` | worker: the session was torn down | restarting notice | yes | yes |
 | `token-expired` | worker: the F5 XC token expired | run `/context create` | no | no |
 | `token-expiring` | worker: the F5 XC token is about to expire | run `/context create` | no | no |
-| `provider-4xx` | worker: the upstream model rejected the request | the raw model error | no | no |
+| `provider-auth` | worker: the configured model credential was rejected | credential rejection notice | no | no |
+| `provider-4xx` | worker: the upstream model rejected the request | fixed request rejection notice | no | no |
 | `provider-5xx` | worker: the upstream model failed | provider error notice | yes | no |
 
 ## Recovery
@@ -34,8 +35,8 @@ causes (stop, tab closed, no first token).
   auto-resend reason is also retryable.
 - **Retry button** — a one-click affordance on the failed turn that replays the
   captured prompt. Shown on the last turn when the reason is retryable.
-- **manual step** — token reasons need `/context create`; a `provider-4xx`
-  surfaces the raw model error so the user can correct the request.
+- **manual step** — token reasons need `/context create`; provider authentication
+  and request failures use fixed messages that do not expose upstream response data.
 
 ## Root cause behind this work
 

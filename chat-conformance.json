@@ -1,5 +1,5 @@
 {
-  "contractVersion": "2.0.0",
+  "contractVersion": "2.2.0",
   "schemas": {
     "chat_request": {
       "type": "object",
@@ -151,9 +151,39 @@
         }
       }
     },
+    "chat_message_start": {
+      "type": "object",
+      "required": ["type", "id", "itemId", "phase"],
+      "properties": {
+        "type": {
+          "const": "chat_message_start",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "itemId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "const": "commentary",
+              "type": "string"
+            },
+            {
+              "const": "final_answer",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
     "chat_delta": {
       "type": "object",
-      "required": ["type", "id", "seq", "delta"],
+      "required": ["type", "id", "itemId", "seq", "delta"],
       "properties": {
         "type": {
           "const": "chat_delta",
@@ -163,11 +193,45 @@
           "pattern": "^c-",
           "type": "string"
         },
+        "itemId": {
+          "minLength": 1,
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         },
         "delta": {
           "type": "string"
+        }
+      }
+    },
+    "chat_message_end": {
+      "type": "object",
+      "required": ["type", "id", "itemId", "phase"],
+      "properties": {
+        "type": {
+          "const": "chat_message_end",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^c-",
+          "type": "string"
+        },
+        "itemId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "const": "commentary",
+              "type": "string"
+            },
+            {
+              "const": "final_answer",
+              "type": "string"
+            }
+          ]
         }
       }
     },
@@ -243,6 +307,10 @@
             },
             {
               "const": "token-expiring",
+              "type": "string"
+            },
+            {
+              "const": "provider-auth",
               "type": "string"
             },
             {
@@ -652,17 +720,31 @@
         "type": "chat_stop",
         "id": "c-1111"
       },
+      "chat_message_start": {
+        "type": "chat_message_start",
+        "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
+        "phase": "final_answer"
+      },
       "chat_delta": {
         "type": "chat_delta",
         "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
         "seq": 0,
         "delta": "This LB "
       },
       "chat_delta_1": {
         "type": "chat_delta",
         "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
         "seq": 1,
         "delta": "routes traffic."
+      },
+      "chat_message_end": {
+        "type": "chat_message_end",
+        "id": "c-1111",
+        "itemId": "c-1111:assistant:0",
+        "phase": "final_answer"
       },
       "chat_done": {
         "type": "chat_done",
@@ -972,6 +1054,16 @@
           "type": "chat_delta",
           "id": "c-1",
           "delta": "x"
+        }
+      },
+      {
+        "schema": "chat_message_start",
+        "why": "unknown phase",
+        "value": {
+          "type": "chat_message_start",
+          "id": "c-1",
+          "itemId": "item",
+          "phase": "thinking"
         }
       },
       {

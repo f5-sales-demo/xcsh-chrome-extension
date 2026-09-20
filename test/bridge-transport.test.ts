@@ -47,13 +47,15 @@ describe('dispatchBridgeFrame', () => {
     dispatchBridgeFrame({ type: 'tool_request', id: 't1', tool: 'navigate' }, h);
     expect(h.calls[0]).toEqual(['tool', { type: 'tool_request', id: 't1', tool: 'navigate' }]);
   });
-  it('routes chat frames (delta/done/error) → onChatInbound', () => {
+  it('routes structured chat item and terminal frames → onChatInbound', () => {
     const h = spy();
-    dispatchBridgeFrame({ type: 'chat_delta', id: 'c-1', seq: 0, delta: 'x' }, h);
+    dispatchBridgeFrame({ type: 'chat_message_start', id: 'c-1', itemId: 'item-1', phase: 'final_answer' }, h);
+    dispatchBridgeFrame({ type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'x' }, h);
+    dispatchBridgeFrame({ type: 'chat_message_end', id: 'c-1', itemId: 'item-1', phase: 'final_answer' }, h);
     dispatchBridgeFrame({ type: 'chat_done', id: 'c-1' }, h);
     dispatchBridgeFrame({ type: 'chat_error', id: 'c-1', reason: 'provider-5xx' }, h);
     dispatchBridgeFrame({ type: 'chat_error', id: 'c-1' }, h);
-    expect(h.calls.map((c) => c[0])).toEqual(['chat', 'chat', 'chat']);
+    expect(h.calls.map((c) => c[0])).toEqual(['chat', 'chat', 'chat', 'chat', 'chat']);
   });
   it('routes a span frame to onSpan and nothing else', () => {
     const got: unknown[] = [];

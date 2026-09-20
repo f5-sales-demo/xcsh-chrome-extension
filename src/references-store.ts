@@ -4,7 +4,7 @@
  * first appeared. Identity-bearing transcript data is never persisted.
  */
 
-import type { ChatRefWire, InteractionMode, PanelAbortReason } from './chat-protocol';
+import type { AssistantMessagePhase, ChatRefWire, InteractionMode, PanelAbortReason } from './chat-protocol';
 import { DEFAULT_MODE } from './chat-protocol';
 
 export interface ChatReference {
@@ -29,6 +29,8 @@ export interface StoredMessage {
   abortReason?: PanelAbortReason;
   /** The user prompt to replay if this aborted turn is retried. */
   retryPrompt?: string;
+  /** Assistant stream item phase, preserved across persistence and replay. */
+  phase?: AssistantMessagePhase;
 }
 
 export interface Conversation {
@@ -68,12 +70,38 @@ export function appendUserMessage(conv: Conversation, msg: StoredMessage): Conve
   };
 }
 
-export function startAssistant(conv: Conversation, msgId: string, at: number): Conversation {
+export function startAssistant(
+  conv: Conversation,
+  msgId: string,
+  at: number,
+  phase?: AssistantMessagePhase,
+): Conversation {
   return {
     ...conv,
-    messages: [...conv.messages, { id: msgId, role: 'assistant', text: '', at }],
+    messages: [...conv.messages, { id: msgId, role: 'assistant', text: '', at, ...(phase ? { phase } : {}) }],
     updatedAt: at,
   };
+}
+
+/** Replace the pre-stream placeholder or append the next structured assistant item. */
+export function startAssistantItem(
+  conv: Conversation,
+  placeholderId: string,
+  itemId: string,
+  phase: AssistantMessagePhase,
+  at: number,
+): Conversation {
+  const placeholder = conv.messages.find((message) => message.id === placeholderId);
+  if (placeholder?.role === 'assistant' && placeholder.text === '') {
+    return {
+      ...conv,
+      messages: conv.messages.map((message) =>
+        message.id === placeholderId ? { ...message, id: itemId, phase, at } : message,
+      ),
+      updatedAt: at,
+    };
+  }
+  return startAssistant(conv, itemId, at, phase);
 }
 
 export function appendAssistantDelta(conv: Conversation, msgId: string, delta: string): Conversation {

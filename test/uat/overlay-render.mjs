@@ -224,14 +224,22 @@ async function main() {
       () => [...globalThis.__xcsh.posted].reverse().find((m) => m?.type === 'chat_request')?.id,
     );
     ok('composer posts a chat request for the formula turn', typeof chatId === 'string');
-    await push(page, { type: 'chat_delta', id: chatId, seq: 0, delta: '$$I \\propto \\frac{1}{\\lambda^4}$$' });
+    const itemId = `${chatId}:assistant:0`;
+    await push(page, { type: 'chat_message_start', id: chatId, itemId, phase: 'final_answer' });
+    await push(page, { type: 'chat_delta', id: chatId, itemId, seq: 0, delta: '$$I \\propto \\frac{1}{\\lambda^4}$$' });
     await page.waitForSelector('.markdown-root math[display="block"] mfrac', { timeout: 3000 });
     const formula = await page.$eval('.markdown-root math[display="block"]', (el) => ({
       text: el.textContent,
       raw: el.parentElement?.textContent ?? '',
     }));
-    ok('assistant LaTeX paints semantic display MathML', /I/.test(formula.text) && /∝/.test(formula.text) && /λ/.test(formula.text));
-    ok('supported formula hides raw LaTeX commands', !formula.raw.includes('\\frac') && !formula.raw.includes('\\lambda'));
+    ok(
+      'assistant LaTeX paints semantic display MathML',
+      /I/.test(formula.text) && /∝/.test(formula.text) && /λ/.test(formula.text),
+    );
+    ok(
+      'supported formula hides raw LaTeX commands',
+      !formula.raw.includes('\\frac') && !formula.raw.includes('\\lambda'),
+    );
     await push(page, { type: 'chat_done', id: chatId, references: [] });
     await page.screenshot({ path: join(ARTIFACTS, '3-math.png') });
 
