@@ -125,8 +125,8 @@ describe('capabilities — features & manifest', () => {
     expect(CONTRACT_VERSION.length).toBeGreaterThan(0);
   });
 
-  it('CONTRACT_VERSION is 2.0.0 (PII-safe clean break)', () => {
-    expect(CONTRACT_VERSION).toBe('2.0.0');
+  it('CONTRACT_VERSION is 2.2.0 (structured assistant items and interactions)', () => {
+    expect(CONTRACT_VERSION).toBe('2.2.0');
   });
 
   it('publishes agent-behavior promptHints sourced from INTERACTION_MODES', () => {
@@ -190,7 +190,9 @@ describe('capabilities — features & manifest', () => {
     expect(chat?.modes).toEqual(['educational', 'presentation', 'configuration', 'screenshot', 'annotation']);
     expect(chat?.messages).toEqual([
       'chat_request',
+      'chat_message_start',
       'chat_delta',
+      'chat_message_end',
       'chat_done',
       'chat_error',
       'chat_stop',
@@ -215,5 +217,13 @@ describe('capabilities — features & manifest', () => {
     expect(cap.protocol).toBe('tool_request/result');
     expect(cap.tools.length).toBe(toolNames().length);
     expect(cap.features.overlays.kinds).toContain('highlight');
+    expect(cap.features.interactions).toEqual({
+      contract: 'xcsh.interaction.v1',
+      waiting: 'request_user_input',
+      asynchronous: 'request_user_input_async',
+      planActions: ['implement', 'fresh', 'stay'],
+      snapshot: true,
+      responseReceipts: true,
+    });
   });
 });

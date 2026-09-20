@@ -29,9 +29,37 @@ describe('panelReducer', () => {
     let s = base();
     s = { ...s, conv: startAssistant(s.conv, 'a1', 0) };
     s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'a1' });
-    s = panelReducer(s, { type: 'stream', msg: { type: 'chat_delta', id: 't1', seq: 0, delta: 'hi' } });
+    s = panelReducer(s, {
+      type: 'stream',
+      msg: { type: 'chat_message_start', id: 't1', itemId: 'item-1', phase: 'final_answer' },
+    });
+    s = panelReducer(s, {
+      type: 'stream',
+      msg: { type: 'chat_delta', id: 't1', itemId: 'item-1', seq: 0, delta: 'hi' },
+    });
     expect(s.active?.state.text).toBe('hi');
-    expect(s.conv.messages.find((m) => m.id === 'a1')?.text).toBe('hi');
+    expect(s.conv.messages.find((m) => m.id === 'item-1')?.text).toBe('hi');
+  });
+
+  it('preserves commentary and final answer as separate assistant items', () => {
+    let s = base();
+    s = { ...s, conv: startAssistant(s.conv, 'placeholder', 0) };
+    s = panelReducer(s, { type: 'begin_turn', id: 't1', msgId: 'placeholder' });
+    for (const msg of [
+      { type: 'chat_message_start', id: 't1', itemId: 'commentary', phase: 'commentary' },
+      { type: 'chat_delta', id: 't1', itemId: 'commentary', seq: 0, delta: 'Working' },
+      { type: 'chat_message_end', id: 't1', itemId: 'commentary', phase: 'commentary' },
+      { type: 'chat_message_start', id: 't1', itemId: 'final', phase: 'final_answer' },
+      { type: 'chat_delta', id: 't1', itemId: 'final', seq: 0, delta: 'Done' },
+      { type: 'chat_message_end', id: 't1', itemId: 'final', phase: 'final_answer' },
+      { type: 'chat_done', id: 't1' },
+    ] as const) {
+      s = panelReducer(s, { type: 'stream', msg, at: 1 });
+    }
+    expect(s.conv.messages.map(({ id, text, phase }) => ({ id, text, phase }))).toEqual([
+      { id: 'commentary', text: 'Working', phase: 'commentary' },
+      { id: 'final', text: 'Done', phase: 'final_answer' },
+    ]);
   });
 
   it('finalizes and clears the active turn on chat_done', () => {

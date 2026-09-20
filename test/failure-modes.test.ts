@@ -21,6 +21,7 @@ const EXPECTED: Record<PanelAbortReason, { retryable: boolean; autoRecover: bool
   'session-disposed': { retryable: true, autoRecover: true },
   'token-expired': { retryable: false, autoRecover: false },
   'token-expiring': { retryable: false, autoRecover: false },
+  'provider-auth': { retryable: false, autoRecover: false },
   'provider-4xx': { retryable: false, autoRecover: false },
   'provider-5xx': { retryable: true, autoRecover: false },
 };

@@ -31,8 +31,10 @@ import { INTERACTION_MODES } from './chat-protocol';
  *        a bad registration so a client awaiting the ack doesn't hang.
  * 2.0.0: clean break — removes credential/login diagnostics, requires per-tab
  *        tenant routing and complete bridge identity frames, and replaces raw
- *        chat errors with required machine-readable reasons. */
-export const CONTRACT_VERSION = '2.0.0';
+ *        chat errors with required machine-readable reasons.
+ * 2.2.0: ordered assistant items preserve commentary/final phases and expose
+ *        the shared interaction contract. */
+export const CONTRACT_VERSION = '2.2.0';
 
 export type ToolCategory = 'navigation' | 'interaction' | 'read' | 'script' | 'annotation' | 'meta';
 
@@ -384,13 +386,23 @@ export const FEATURES = {
     tool: 'resize_window',
     description: 'Control the browser window size.',
   },
+  interactions: {
+    contract: 'xcsh.interaction.v1',
+    waiting: 'request_user_input',
+    asynchronous: 'request_user_input_async',
+    planActions: ['implement', 'fresh', 'stay'],
+    snapshot: true,
+    responseReceipts: true,
+  },
   chat: {
     contextTool: 'get_page_context',
     transport: 'websocket-bridge',
     modes: ['educational', 'presentation', 'configuration', 'screenshot', 'annotation'] as const,
     messages: [
       'chat_request',
+      'chat_message_start',
       'chat_delta',
+      'chat_message_end',
       'chat_done',
       'chat_error',
       'chat_stop',
@@ -404,7 +416,7 @@ export const FEATURES = {
       'host_tool_cancel',
     ] as const,
     description:
-      'User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams chat_delta tokens then a terminal chat_done (with reference links) or chat_error. Chat ids are prefixed "c-". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel.',
+      'User ↔ xcsh chat over the bridge. The extension side panel sends chat_request (with mode and page-context snapshot); xcsh streams ordered assistant items using chat_message_start, correlated chat_delta tokens, and chat_message_end. Each item declares commentary or final_answer phase. Exactly one terminal chat_done (with reference links) or chat_error closes the whole turn. Chat ids are prefixed "c-". Tool calls during a turn use the normal tool_request flow. chat_stop halts a streaming response. chat_tool_notice is emitted by the EXTENSION (the service worker) to the panel as a best-effort UI signal when a tool runs during a turn — it is NOT sent by xcsh; xcsh must not produce it to avoid double-rendering in the panel.',
     promptHints: CHAT_PROMPT_HINTS,
   },
 } as const;

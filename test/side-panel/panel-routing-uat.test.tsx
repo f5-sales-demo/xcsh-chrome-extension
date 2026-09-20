@@ -184,7 +184,8 @@ describe('panel routing UAT (#166)', () => {
     const turnId = lastOfType(h.posted, 'chat_request')?.id as string;
 
     // First delta streams in fine.
-    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 0, delta: 'Navigating' });
+    h.pushToPanel({ type: 'chat_message_start', id: turnId, itemId: `${turnId}:assistant:0`, phase: 'final_answer' });
+    h.pushToPanel({ type: 'chat_delta', id: turnId, itemId: `${turnId}:assistant:0`, seq: 0, delta: 'Navigating' });
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
 
     // The agent navigates THIS tab — its URL changes, firing onUpdated for tab 7.
@@ -192,7 +193,13 @@ describe('panel routing UAT (#166)', () => {
 
     // The turn must still be active (not suspended) so the rest of the reply renders.
     await waitFor(() => expect(h.api().state.active?.id).toBe(turnId));
-    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 1, delta: ' to Health Checks.' });
+    h.pushToPanel({
+      type: 'chat_delta',
+      id: turnId,
+      itemId: `${turnId}:assistant:0`,
+      seq: 1,
+      delta: ' to Health Checks.',
+    });
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating to Health Checks.'));
   });
 
@@ -212,7 +219,8 @@ describe('panel routing UAT (#166)', () => {
     const turnId = lastOfType(h.posted, 'chat_request')?.id as string;
 
     // Stream some text so the transcript has a visible partial reply.
-    h.pushToPanel({ type: 'chat_delta', id: turnId, seq: 0, delta: 'Navigating' });
+    h.pushToPanel({ type: 'chat_message_start', id: turnId, itemId: `${turnId}:assistant:0`, phase: 'final_answer' });
+    h.pushToPanel({ type: 'chat_delta', id: turnId, itemId: `${turnId}:assistant:0`, seq: 0, delta: 'Navigating' });
     await waitFor(() => expect(h.api().state.active?.state.text).toBe('Navigating'));
 
     // The agent navigates THIS tab to another SAME-tenant page.

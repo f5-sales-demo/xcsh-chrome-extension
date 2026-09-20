@@ -81,6 +81,14 @@ export function usePanel() {
   const skillsRequestedForRun = useRef(-1);
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
+  const interactionTransport = useMemo(
+    () => ({
+      send: (message: import('../vendor/chat-ui').InteractionCommand) =>
+        bus.post({ ...message, tabId: boundTabId.current, sessionKey: boundSessionKey.current ?? undefined }),
+      onMessage: (callback: (message: unknown) => void) => bus.on(callback),
+    }),
+    [bus],
+  );
   const turnTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Auto-resend-once: on a recoverable failure we stash the prompt; when activation
   // returns to `ready` (worker re-provisioned) it is replayed exactly once, then
@@ -231,6 +239,7 @@ export function usePanel() {
     if (next.phase === 'ready' && skillsRequestedForRun.current !== next.runId) {
       skillsRequestedForRun.current = next.runId;
       bus.post({ type: 'list_skills', tabId: boundTabId.current, sessionKey: boundSessionKey.current ?? undefined });
+      interactionTransport.send({ type: 'interaction_snapshot' });
     }
     // Auto-resend-once: the worker was re-provisioned after a recoverable failure and
     // is ready again — replay the stashed prompt exactly once, through the normal send
@@ -584,6 +593,7 @@ export function usePanel() {
   }
 
   return {
+    interactionTransport,
     state,
     contextLabel: contextChipText(state),
     placeholder: composerPlaceholder(state),

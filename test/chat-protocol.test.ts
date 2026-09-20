@@ -53,8 +53,8 @@ describe('reduceChatTurn', () => {
 
   it('accumulates ordered deltas', () => {
     const s = feed([
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'Hel' },
-      { type: 'chat_delta', id: 'c-1', seq: 1, delta: 'lo' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'Hel' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 1, delta: 'lo' },
     ]);
     expect(s.text).toBe('Hello');
     expect(s.status).toBe('streaming');
@@ -62,16 +62,16 @@ describe('reduceChatTurn', () => {
 
   it('ignores duplicate/older seq', () => {
     const s = feed([
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'A' },
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'A' },
-      { type: 'chat_delta', id: 'c-1', seq: 1, delta: 'B' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'A' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'A' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 1, delta: 'B' },
     ]);
     expect(s.text).toBe('AB');
   });
 
   it('finalizes on done with references', () => {
     const s = feed([
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'x' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'x' },
       { type: 'chat_done', id: 'c-1', references: [{ kind: 'doc', title: 'T', url: 'https://d' }] },
     ]);
     expect(s.status).toBe('done');
@@ -81,7 +81,7 @@ describe('reduceChatTurn', () => {
   it('records errors and ignores events after a terminal state', () => {
     const s = feed([
       { type: 'chat_error', id: 'c-1', reason: 'provider-5xx' },
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'late' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'late' },
     ]);
     expect(s.status).toBe('error');
     expect(s.text).toBe('');
@@ -89,15 +89,15 @@ describe('reduceChatTurn', () => {
 
   it('ignores chat_delta with mismatched id', () => {
     const s = feed([
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'Hel' },
-      { type: 'chat_delta', id: 'c-2', seq: 1, delta: 'lo' }, // wrong id
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'Hel' },
+      { type: 'chat_delta', id: 'c-2', itemId: 'item-2', seq: 1, delta: 'lo' }, // wrong id
     ]);
     expect(s.text).toBe('Hel');
   });
 
   it('chat_done without references yields empty array', () => {
     const s = feed([
-      { type: 'chat_delta', id: 'c-1', seq: 0, delta: 'x' },
+      { type: 'chat_delta', id: 'c-1', itemId: 'item-1', seq: 0, delta: 'x' },
       { type: 'chat_done', id: 'c-1' }, // no references
     ]);
     expect(s.status).toBe('done');
@@ -106,8 +106,10 @@ describe('reduceChatTurn', () => {
 });
 
 describe('isChatInbound', () => {
-  it('accepts chat_delta, chat_done, chat_error, and chat_tool_notice', () => {
-    expect(isChatInbound({ type: 'chat_delta', id: 'c', seq: 0, delta: '' })).toBe(true);
+  it('accepts structured assistant items, terminal frames, and tool notices', () => {
+    expect(isChatInbound({ type: 'chat_message_start', id: 'c', itemId: 'item', phase: 'commentary' })).toBe(true);
+    expect(isChatInbound({ type: 'chat_delta', id: 'c', itemId: 'item', seq: 0, delta: '' })).toBe(true);
+    expect(isChatInbound({ type: 'chat_message_end', id: 'c', itemId: 'item', phase: 'commentary' })).toBe(true);
     expect(isChatInbound({ type: 'chat_done', id: 'c' })).toBe(true);
     expect(isChatInbound({ type: 'chat_error', id: 'c', reason: 'provider-5xx' })).toBe(true);
     expect(isChatInbound({ type: 'chat_error', id: 'c' })).toBe(false);

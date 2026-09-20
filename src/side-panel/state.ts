@@ -6,7 +6,13 @@ import {
   type PanelAbortReason,
   reduceChatTurn,
 } from '../chat-protocol';
-import { appendAssistantDelta, type Conversation, finalizeAssistant, markAborted } from '../references-store';
+import {
+  appendAssistantDelta,
+  type Conversation,
+  finalizeAssistant,
+  markAborted,
+  startAssistantItem,
+} from '../references-store';
 import { type ActivationState, initActivation } from './activation';
 
 export interface PanelState {
@@ -17,7 +23,7 @@ export interface PanelState {
   sessionLabel: string;
   /** Tab-activation readiness gate state (bridge/worker/page) + derived phase. */
   activation: ActivationState;
-  active: { id: string; msgId: string; state: ChatTurnState; prompt: string } | null;
+  active: { id: string; msgId: string; itemIds: string[]; state: ChatTurnState; prompt: string } | null;
 }
 
 export function initPanelState(conv: Conversation): PanelState {
@@ -60,16 +66,22 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
     case 'page_context':
       return { ...s, contextMeta: a.meta };
     case 'begin_turn':
-      return { ...s, active: { id: a.id, msgId: a.msgId, state: initChatTurn(a.id), prompt: a.prompt ?? '' } };
+      return {
+        ...s,
+        active: { id: a.id, msgId: a.msgId, itemIds: [], state: initChatTurn(a.id), prompt: a.prompt ?? '' },
+      };
     case 'end_turn':
       return { ...s, active: null };
     case 'abort_turn':
       if (!s.active) return s;
-      return {
-        ...s,
-        conv: markAborted(s.conv, s.active.msgId, a.at, a.reason, s.active.prompt),
-        active: null,
-      };
+      {
+        const msgId = s.active.itemIds.at(-1) ?? s.active.msgId;
+        return {
+          ...s,
+          conv: markAborted(s.conv, msgId, a.at, a.reason, s.active.prompt),
+          active: null,
+        };
+      }
     case 'suspend_turn':
       // Tab switched away mid-turn. Stop tracking (so a new tab can begin its own
       // turn) WITHOUT marking the message aborted — the conversation in storage
@@ -81,23 +93,38 @@ export function panelReducer(s: PanelState, a: PanelAction): PanelState {
       if (!s.active || s.active.id !== a.msg.id) return s;
       const turn = reduceChatTurn(s.active.state, a.msg);
       const at = a.at ?? 0;
+      if (a.msg.type === 'chat_message_start') {
+        if (s.active.itemIds.includes(a.msg.itemId)) return s;
+        const placeholderId = s.active.itemIds.length === 0 ? s.active.msgId : '';
+        return {
+          ...s,
+          active: { ...s.active, itemIds: [...s.active.itemIds, a.msg.itemId], state: turn },
+          conv: startAssistantItem(s.conv, placeholderId, a.msg.itemId, a.msg.phase, at),
+        };
+      }
       if (a.msg.type === 'chat_delta') {
+        if (!s.active.itemIds.includes(a.msg.itemId)) return s;
         return {
           ...s,
           active: { ...s.active, state: turn },
-          conv: appendAssistantDelta(s.conv, s.active.msgId, a.msg.delta),
+          conv: appendAssistantDelta(s.conv, a.msg.itemId, a.msg.delta),
         };
       }
+      if (a.msg.type === 'chat_message_end') return { ...s, active: { ...s.active, state: turn } };
       if (a.msg.type === 'chat_done') {
+        const finalId = [...s.active.itemIds]
+          .reverse()
+          .find((id) => s.conv.messages.find((message) => message.id === id)?.phase === 'final_answer');
+        const msgId = finalId ?? s.active.itemIds.at(-1) ?? s.active.msgId;
         return {
           ...s,
-          conv: finalizeAssistant(s.conv, s.active.msgId, turn.references, at),
+          conv: finalizeAssistant(s.conv, msgId, turn.references, at),
           active: null,
         };
       }
       // chat_error — retain only the machine-readable reason and retry prompt.
       // Raw provider text can contain page or customer data and is discarded.
-      const msgId = s.active.msgId;
+      const msgId = s.active.itemIds.at(-1) ?? s.active.msgId;
       const reason = (a.msg as ChatErrorMsg).reason;
       const prompt = s.active.prompt;
       return {
@@ -190,6 +217,11 @@ const ABORT_INFO: Record<PanelAbortReason, AbortInfo> = {
     autoRecover: false,
   },
   'token-expiring': { text: 'F5 XC token is expiring — run /context create.', retryable: false, autoRecover: false },
+  'provider-auth': {
+    text: 'The configured AI provider rejected its credential.',
+    retryable: false,
+    autoRecover: false,
+  },
   'provider-4xx': {
     text: 'xcsh could not handle that request.',
     retryable: false,

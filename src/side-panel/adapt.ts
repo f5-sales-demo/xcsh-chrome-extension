@@ -60,7 +60,7 @@ export function convToMessages(conv: Conversation): ChatMessage[] {
       return { id: m.id, role: m.role, text, error: true, ...(retryText ? { retryText } : {}) };
     }
     const references = citedSources(conv, m.refs);
-    return { id: m.id, role: m.role, text: m.text, ...(references ? { references } : {}) };
+    return { id: m.id, role: m.role, text: m.text, phase: m.phase, ...(references ? { references } : {}) };
   });
 }
 
