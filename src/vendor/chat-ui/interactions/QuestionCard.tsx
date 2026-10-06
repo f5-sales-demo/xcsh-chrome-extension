@@ -65,7 +65,7 @@ export function QuestionCard({ requestId, questions, onRespond, onInterrupt }: Q
 								name={requestId}
 								checked={form.draft.highlighted === index}
 								onChange={() => {
-									form.moveOption(index - form.draft.highlighted);
+									form.selectOption(index);
 									render(null);
 								}}
 							/>
@@ -73,15 +73,28 @@ export function QuestionCard({ requestId, questions, onRespond, onInterrupt }: Q
 							<small style={{ display: "block" }}>{option.description}</small>
 						</label>
 					))}
-					<label>
+					<label htmlFor={`${requestId}-notes-${form.index}`}>
 						{form.options.length ? INPUT_COPY.notes : INPUT_COPY.answer}
-						<textarea
-							value={form.draft.notes}
-							onChange={event => {
-								form.editNotes(event.currentTarget.value);
-								render(null);
-							}}
-						/>
+						{form.question.isSecret ? (
+							<input
+								id={`${requestId}-notes-${form.index}`}
+								type="password"
+								value={form.draft.notes}
+								onChange={event => {
+									form.editNotes(event.currentTarget.value);
+									render(null);
+								}}
+							/>
+						) : (
+							<textarea
+								id={`${requestId}-notes-${form.index}`}
+								value={form.draft.notes}
+								onChange={event => {
+									form.editNotes(event.currentTarget.value);
+									render(null);
+								}}
+							/>
+						)}
 					</label>
 					{questions.length > 1 ? (
 						<>
@@ -126,10 +139,12 @@ export function AsyncQuestionCard({
 	title,
 	options,
 	onRespond,
+	onDismiss,
 }: {
 	title: string;
 	options?: readonly string[];
 	onRespond: (answer: string) => Promise<{ accepted: boolean }>;
+	onDismiss?: () => void;
 }) {
 	const [choice, setChoice] = useState(options?.[0] ?? "");
 	const [text, setText] = useState("");
@@ -166,6 +181,11 @@ export function AsyncQuestionCard({
 			<button type="button" disabled={sending || !(text || choice).trim()} onClick={() => void submit()}>
 				Submit answer
 			</button>
+			{onDismiss ? (
+				<button type="button" disabled={sending} onClick={onDismiss}>
+					Answer later
+				</button>
+			) : null}
 			{error ? <p role="alert">{error}</p> : null}
 		</section>
 	);
