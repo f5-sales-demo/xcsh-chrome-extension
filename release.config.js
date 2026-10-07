@@ -47,7 +47,7 @@ export default {
         // Fail EARLY (before any version commit/tag) if CWS credentials are
         // missing — prevents a half-done release (tag pushed, publish failed).
         verifyConditionsCmd:
-          'test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
+          'bun scripts/verify-immutable-release.mjs && test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
         // Build ONE artifact: xcsh-chrome-extension.zip — the store package, with
         // NO `key` (CWS assigns the ID from its own keypair and rejects a `key`).
         // Local-dev keying lives in `bun run build:dev`, never in the release.
@@ -70,7 +70,10 @@ export default {
       {
         assets: [
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          { path: 'xcsh-chrome-extension.zip', label: 'Chrome Web Store package — v${nextRelease.version}' },
+          {
+            path: 'xcsh-chrome-extension.zip',
+            label: 'Chrome Web Store package — v${nextRelease.version}',
+          },
         ],
       },
     ],
