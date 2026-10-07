@@ -83,12 +83,16 @@ export function usePanel() {
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
   const answerTurns = useRef(new Map<string, string>());
+  const answeredReceipts = useRef(new Set<string>());
   const interactionTransport = useMemo(
     () => ({
       send: (message: import('../vendor/chat-ui').InteractionCommand) => {
         let chatId: string | undefined;
-        const continuation = prepareAnswerContinuation(message, Boolean(stateRef.current.active), () =>
-          crypto.randomUUID(),
+        const continuation = prepareAnswerContinuation(
+          message,
+          Boolean(stateRef.current.active) ||
+            (message.type === 'interaction_respond' && answeredReceipts.current.has(message.responseId)),
+          () => crypto.randomUUID(),
         );
         if (message.type === 'interaction_respond' && continuation) {
           chatId = continuation.chatId;
@@ -99,6 +103,11 @@ export function usePanel() {
             text: continuation.summary,
             at: now(),
           });
+          answeredReceipts.current.add(message.responseId);
+          if (answeredReceipts.current.size > 256) {
+            const oldest = answeredReceipts.current.values().next().value;
+            if (oldest) answeredReceipts.current.delete(oldest);
+          }
           answerTurns.current.set(message.responseId, chatId);
           dispatch({ type: 'set_conv', conv });
           dispatch({ type: 'begin_turn', id: chatId, msgId: `assistant-${chatId}`, prompt: '' });
