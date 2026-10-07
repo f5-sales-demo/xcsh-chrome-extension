@@ -49,6 +49,7 @@ import {
   newlyResolvedGates,
   shouldAutoRetryWorkerGate,
 } from './activation';
+import { prepareAnswerContinuation } from './answer-continuation';
 import { abortInfo, composerPlaceholder, contextChipText, initPanelState, inputLocked, panelReducer } from './state';
 
 const TURN_TIMEOUT_MS = 120_000; // old side-panel.ts:84; 120s covers complex multi-resource first-token thinking (#246)
@@ -81,10 +82,34 @@ export function usePanel() {
   const skillsRequestedForRun = useRef(-1);
   const boundSessionKey = useRef<string | null>(null);
   const boundTabId = useRef<number | undefined>(undefined);
+  const answerTurns = useRef(new Map<string, string>());
   const interactionTransport = useMemo(
     () => ({
-      send: (message: import('../vendor/chat-ui').InteractionCommand) =>
-        bus.post({ ...message, tabId: boundTabId.current, sessionKey: boundSessionKey.current ?? undefined }),
+      send: (message: import('../vendor/chat-ui').InteractionCommand) => {
+        let chatId: string | undefined;
+        const continuation = prepareAnswerContinuation(message, Boolean(stateRef.current.active), () =>
+          crypto.randomUUID(),
+        );
+        if (message.type === 'interaction_respond' && continuation) {
+          chatId = continuation.chatId;
+          const msgId = `answer-summary-${crypto.randomUUID()}`;
+          const conv = appendUserMessage(stateRef.current.conv, {
+            id: msgId,
+            role: 'user',
+            text: continuation.summary,
+            at: now(),
+          });
+          answerTurns.current.set(message.responseId, chatId);
+          dispatch({ type: 'set_conv', conv });
+          dispatch({ type: 'begin_turn', id: chatId, msgId: `assistant-${chatId}`, prompt: '' });
+        }
+        bus.post({
+          ...message,
+          ...(chatId ? { chatId } : {}),
+          tabId: boundTabId.current,
+          sessionKey: boundSessionKey.current ?? undefined,
+        });
+      },
       onMessage: (callback: (message: unknown) => void) => bus.on(callback),
     }),
     [bus],
@@ -313,6 +338,15 @@ export function usePanel() {
   // Port routing + tab listeners. Mount once.
   useEffect(() => {
     const offPort = bus.on((m: unknown) => {
+      if (m && typeof m === 'object' && Reflect.get(m, 'type') === 'interaction_receipt') {
+        const responseId = Reflect.get(m, 'responseId');
+        const resumed = answerTurns.current.get(responseId);
+        if (resumed) {
+          answerTurns.current.delete(responseId);
+          if (Reflect.get(m, 'accepted') !== true && stateRef.current.active?.id === resumed)
+            dispatch({ type: 'end_turn' });
+        }
+      }
       if (!m || typeof m !== 'object') return;
       const msg = m as Record<string, unknown>;
       if (msg.type === 'status') {
