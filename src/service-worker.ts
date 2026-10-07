@@ -715,9 +715,20 @@ function sendTo(port: number | undefined, msg: unknown): boolean {
 }
 
 const interactionPanels = new Map<chrome.runtime.Port, number>();
+const answerTurns = new Map<string, string>();
 // biome-ignore lint/suspicious/noExplicitAny: bridge message shape
 function onMessage(msg: any, sourcePort: number): void {
   if (isInteractionFrame(msg)) {
+    if (msg.type === 'interaction_receipt') {
+      const resumed = answerTurns.get(msg.responseId);
+      if (resumed) {
+        answerTurns.delete(msg.responseId);
+        if (!msg.accepted) {
+          turnToPort.delete(resumed);
+          turnToBridgePort.delete(resumed);
+        }
+      }
+    }
     for (const [panel, boundPort] of interactionPanels) {
       if (boundPort === sourcePort) {
         try {
@@ -992,6 +1003,12 @@ chrome.runtime.onConnect.addListener((port) => {
       if (plan.kind === 'skip') return;
       if (m.type !== 'interaction_snapshot' && interactionPanels.get(port) !== plan.port) return;
       interactionPanels.set(port, plan.port);
+      const chatId = Reflect.get(m, 'chatId');
+      if (m.type === 'interaction_respond' && typeof chatId === 'string' && /^[A-Za-z0-9:_-]{1,128}$/.test(chatId)) {
+        answerTurns.set(m.responseId, chatId);
+        turnToPort.set(chatId, port);
+        turnToBridgePort.set(chatId, plan.port);
+      }
       sendTo(plan.port, m);
       return;
     }
