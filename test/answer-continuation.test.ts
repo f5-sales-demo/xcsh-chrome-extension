@@ -13,3 +13,9 @@ test('idle answer prepares a readable summary and correlated turn; streaming ans
   expect(prepareAnswerContinuation(command, true, () => 'fixed')).toBeUndefined();
   expect(prepareAnswerContinuation({ type: 'interaction_snapshot' }, false, () => 'fixed')).toBeUndefined();
 });
+
+test('waiting answer objects do not create async continuation summaries', () => {
+  expect(
+    prepareAnswerContinuation({ type: 'interaction_respond', value: { answers: {} } }, false, () => 'fixed'),
+  ).toBeUndefined();
+});
