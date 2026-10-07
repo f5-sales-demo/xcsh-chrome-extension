@@ -22,32 +22,32 @@
  *   CHROME_REFRESH_TOKEN   — Chrome Web Store API OAuth refresh token
  */
 export default {
-  branches: ['main'],
+  branches: ["main"],
   plugins: [
     [
-      '@semantic-release/commit-analyzer',
+      "@semantic-release/commit-analyzer",
       {
-        preset: 'angular',
+        preset: "angular",
         releaseRules: [
-          { breaking: true, release: 'major' },
-          { type: 'feat', release: 'minor' },
-          { type: 'fix', release: 'patch' },
-          { type: 'perf', release: 'patch' },
-          { type: 'revert', release: 'patch' },
-          { type: 'refactor', release: 'patch' },
-          { type: 'build', release: 'patch' },
-          { type: 'ci', release: 'patch' },
+          { breaking: true, release: "major" },
+          { type: "feat", release: "minor" },
+          { type: "fix", release: "patch" },
+          { type: "perf", release: "patch" },
+          { type: "revert", release: "patch" },
+          { type: "refactor", release: "patch" },
+          { type: "build", release: "patch" },
+          { type: "ci", release: "patch" },
         ],
       },
     ],
-    '@semantic-release/release-notes-generator',
+    "@semantic-release/release-notes-generator",
     [
-      '@semantic-release/exec',
+      "@semantic-release/exec",
       {
         // Fail EARLY (before any version commit/tag) if CWS credentials are
         // missing — prevents a half-done release (tag pushed, publish failed).
         verifyConditionsCmd:
-          'test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
+          'bun scripts/verify-immutable-release.mjs && test -n "$EXTENSION_ID" && test -n "$CLIENT_ID" && test -n "$CLIENT_SECRET" && test -n "$REFRESH_TOKEN" || (echo "Missing Chrome Web Store credentials (EXTENSION_ID/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN)" && exit 1)',
         // Build ONE artifact: xcsh-chrome-extension.zip — the store package, with
         // NO `key` (CWS assigns the ID from its own keypair and rejects a `key`).
         // Local-dev keying lives in `bun run build:dev`, never in the release.
@@ -62,15 +62,18 @@ export default {
         // behavior silently wedged the pipeline.
         publishCmd:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          'node scripts/publish-cws.mjs ${nextRelease.version}',
+          "node scripts/publish-cws.mjs ${nextRelease.version}",
       },
     ],
     [
-      '@semantic-release/github',
+      "@semantic-release/github",
       {
         assets: [
           // biome-ignore lint/suspicious/noTemplateCurlyInString: semantic-release template syntax
-          { path: 'xcsh-chrome-extension.zip', label: 'Chrome Web Store package — v${nextRelease.version}' },
+          {
+            path: "xcsh-chrome-extension.zip",
+            label: "Chrome Web Store package — v${nextRelease.version}",
+          },
         ],
       },
     ],
