@@ -55,7 +55,7 @@
     "types.ts": "sha256:1711884a3062fe9e726e851d8f2e35975c60a02e8bcd3de903ef104d5144cf99",
     "voice/VoiceCompanionControl.tsx": "sha256:788a685bf5ba6e9242fef7b9acbb437856b871920038b1e9b6498347f4aacbb1",
     "voice/VoiceControls.tsx": "sha256:c11d0ad3df2e00c4f4867a8fdca586ea15071d5f5a50d4ff9483a39734f8ad2c",
-    "voice/browser-client.ts": "sha256:b5a14e4ac4b6b265e255aade00730b2a46e84f63de790330ab1016a9a0aae660",
+    "voice/browser-client.ts": "sha256:2e56f5a3e29a9c9f2c8017174e6e64816fd7c23d5d7087f01edc096b20a3ebbd",
     "voice/contract.ts": "sha256:f9fba94e95c6ee7d363cddf4228eb6f941e43788e5b0dccbbfe6901189f53b64"
   }
 }
