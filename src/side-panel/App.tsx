@@ -1,7 +1,14 @@
 import { useCallback, useMemo, useRef } from 'preact/hooks';
 import type { InteractionMode } from '../chat-protocol';
 import type { AttachCategory, ComposerHandle, SlashCommand } from '../vendor/chat-ui';
-import { ActivationOverlay, Composer, ContextChip, InteractionPanel, Transcript, VoiceControls } from '../vendor/chat-ui';
+import {
+  ActivationOverlay,
+  Composer,
+  ContextChip,
+  InteractionPanel,
+  Transcript,
+  VoiceControls,
+} from '../vendor/chat-ui';
 import { activationToGates, convToMessages, MODES, overlayBlocked } from './adapt';
 import { inputLocked, overlayVisible } from './state';
 import { usePanel } from './use-panel';
