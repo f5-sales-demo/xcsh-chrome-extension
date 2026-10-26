@@ -43,7 +43,7 @@ describe('vendored chat-ui drift guard (verifySelf)', () => {
 
   it('every vendored file matches its recorded sha256 (no hand-edits / partial copy)', () => {
     const problems = Object.entries(manifest.files).filter(([rel, expected]) => {
-      return sha256(readFileSync(join(VENDOR_DIR, rel))) !== expected;
+      return sha256(readFileSync(join(VENDOR_DIR, rel))) !== expected.replace(/^sha256:/, "");
     });
     expect(problems.map(([rel]) => rel)).toEqual([]);
   });
