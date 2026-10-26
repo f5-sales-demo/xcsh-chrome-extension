@@ -54,8 +54,8 @@
     "tools/activity-label.ts": "sha256:3bee988f6e38037cd1cef7457ed6def75b7f1782b337ac0d1e9968fafc70b743",
     "types.ts": "sha256:1711884a3062fe9e726e851d8f2e35975c60a02e8bcd3de903ef104d5144cf99",
     "voice/VoiceCompanionControl.tsx": "sha256:788a685bf5ba6e9242fef7b9acbb437856b871920038b1e9b6498347f4aacbb1",
-    "voice/VoiceControls.tsx": "sha256:c11d0ad3df2e00c4f4867a8fdca586ea15071d5f5a50d4ff9483a39734f8ad2c",
-    "voice/browser-client.ts": "sha256:2e56f5a3e29a9c9f2c8017174e6e64816fd7c23d5d7087f01edc096b20a3ebbd",
-    "voice/contract.ts": "sha256:f9fba94e95c6ee7d363cddf4228eb6f941e43788e5b0dccbbfe6901189f53b64"
+    "voice/VoiceControls.tsx": "sha256:cb810584b50f7f46a6717e406857c5d6c0bafe488fbc18002f711374c4d0c8e5",
+    "voice/browser-client.ts": "sha256:639d6d44f9c6f39caa8b7cfb7dfe5d57d81eb65f1b39f895cd34c9a7115af6d0",
+    "voice/contract.ts": "sha256:3fa737abaf1e73e8d9eb40c3a085046a8cf475c73e07058c525642604e7e8df6"
   }
 }
