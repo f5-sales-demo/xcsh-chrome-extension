@@ -1,4 +1,5 @@
 import { isInteractionCommand, isInteractionFrame } from './vendor/chat-ui/interactions/transport';
+import { isVoiceFrame, isVoiceRequest } from './vendor/chat-ui/voice/contract';
 /**
  * xcsh service worker — WebSocket bridge client + the 5 tools.
  *
@@ -716,8 +717,21 @@ function sendTo(port: number | undefined, msg: unknown): boolean {
 
 const interactionPanels = new Map<chrome.runtime.Port, number>();
 const answerTurns = new Map<string, string>();
-// biome-ignore lint/suspicious/noExplicitAny: bridge message shape
-function onMessage(msg: any, sourcePort: number): void {
+const voicePanels = new Map<chrome.runtime.Port, { bridgePort: number; chatId?: string }>();
+function onMessage(msg: unknown, sourcePort: number): void {
+  if (isVoiceFrame(msg)) {
+    for (const [panel, binding] of voicePanels) {
+      if (binding.bridgePort !== sourcePort) continue;
+      if (msg.method === 'xcsh/voice/capabilities') binding.chatId = msg.chatId;
+      if (binding.chatId !== msg.chatId) continue;
+      try {
+        panel.postMessage(msg);
+      } catch {
+        voicePanels.delete(panel);
+      }
+    }
+    return;
+  }
   if (isInteractionFrame(msg)) {
     if (msg.type === 'interaction_receipt') {
       const resumed = answerTurns.get(msg.responseId);
@@ -994,6 +1008,21 @@ chrome.runtime.onConnect.addListener((port) => {
   chatPanels.add(port);
   port.onMessage.addListener((m) => {
     if (!m || typeof m !== 'object') return;
+    if (isVoiceRequest(m)) {
+      const plan = planSkillsRequest(
+        { tabId: Reflect.get(m, 'tabId'), sessionKey: Reflect.get(m, 'sessionKey') },
+        registry,
+        (p) => sockets.get(p)?.readyState === WebSocket.OPEN,
+      );
+      if (plan.kind === 'skip') return;
+      if (m.action === 'capabilities') voicePanels.set(port, { bridgePort: plan.port });
+      else {
+        const binding = voicePanels.get(port);
+        if (!binding || binding.bridgePort !== plan.port || binding.chatId !== m.chatId) return;
+      }
+      sendTo(plan.port, m);
+      return;
+    }
     if (isInteractionCommand(m)) {
       const plan = planSkillsRequest(
         { tabId: Reflect.get(m, 'tabId'), sessionKey: Reflect.get(m, 'sessionKey') },
@@ -1160,6 +1189,15 @@ chrome.runtime.onConnect.addListener((port) => {
     }
   });
   port.onDisconnect.addListener(() => {
+    const voice = voicePanels.get(port);
+    if (voice?.chatId)
+      sendTo(voice.bridgePort, {
+        type: 'voice_request',
+        action: 'stop',
+        requestId: crypto.randomUUID(),
+        chatId: voice.chatId,
+      });
+    voicePanels.delete(port);
     interactionPanels.delete(port);
     chatPanels.delete(port);
     skillsWaiters.forgetPanel(port); // the reply may still arrive; deliver to nobody

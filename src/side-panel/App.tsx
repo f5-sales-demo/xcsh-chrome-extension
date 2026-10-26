@@ -1,7 +1,14 @@
 import { useCallback, useMemo, useRef } from 'preact/hooks';
 import type { InteractionMode } from '../chat-protocol';
 import type { AttachCategory, ComposerHandle, SlashCommand } from '../vendor/chat-ui';
-import { ActivationOverlay, Composer, ContextChip, InteractionPanel, Transcript } from '../vendor/chat-ui';
+import {
+  ActivationOverlay,
+  Composer,
+  ContextChip,
+  InteractionPanel,
+  Transcript,
+  VoiceControls,
+} from '../vendor/chat-ui';
 import { activationToGates, convToMessages, MODES, overlayBlocked } from './adapt';
 import { inputLocked, overlayVisible } from './state';
 import { usePanel } from './use-panel';
@@ -56,6 +63,7 @@ export function App() {
       {s.activation.phase === 'ready' ? (
         <InteractionPanel key={s.activation.runId} transport={p.interactionTransport} />
       ) : null}
+      <VoiceControls transport={p.voiceTransport} ready={s.activation.phase === 'ready'} />
       <Composer
         ref={composerRef}
         disabled={inputLocked(s)}

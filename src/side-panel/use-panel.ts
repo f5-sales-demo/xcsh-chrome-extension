@@ -123,6 +123,14 @@ export function usePanel() {
     }),
     [bus],
   );
+  const voiceTransport = useMemo(
+    () => ({
+      send: (message: import('../vendor/chat-ui').VoiceRequest) =>
+        bus.post({ ...message, tabId: boundTabId.current, sessionKey: boundSessionKey.current ?? undefined }),
+      onMessage: (callback: (message: unknown) => void) => bus.on(callback),
+    }),
+    [bus],
+  );
   const turnTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Auto-resend-once: on a recoverable failure we stash the prompt; when activation
   // returns to `ready` (worker re-provisioned) it is replayed exactly once, then
@@ -636,6 +644,7 @@ export function usePanel() {
   }
 
   return {
+    voiceTransport,
     interactionTransport,
     state,
     contextLabel: contextChipText(state),
