@@ -82,6 +82,20 @@ afterEach(() => {
 });
 
 describe('activation readiness UAT', () => {
+  it('accepts back-to-back bridge and worker snapshots when reopening a warm panel', async () => {
+    const h = mount(F5_TAB);
+    await settle();
+    h.push({ type: 'status', connected: true });
+    h.push({ type: 'bridges', tenants: [{ tenant: F5_KEY, contextBound: false }] });
+    await settle();
+    const runId = lastReqId(h.posted);
+    expect(typeof runId).toBe('number');
+    h.push({ type: 'page_context', snapshot: { title: 'Restored conversation', path: '/home' }, reqId: runId });
+    await settle();
+    expect(inputLocked(h.container)).toBe(false);
+    expect(txt(h.container)).not.toContain('starting worker');
+  });
+
   it('overlays + locks input until bridge→worker→page all pass, then reveals the panel', async () => {
     const h = mount(F5_TAB);
     await settle(); // boot reset → bridge active (status not yet received)

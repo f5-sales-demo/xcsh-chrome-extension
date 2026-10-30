@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { cleanup, render, waitFor } from '@testing-library/preact';
 import { inputLocked, overlayVisible } from '../../src/side-panel/state';
 import { usePanel } from '../../src/side-panel/use-panel';
+import { loadConversation } from '../../src/side-panel-store';
 
 type Posted = Record<string, unknown>;
 
@@ -125,6 +126,23 @@ afterEach(() => {
 });
 
 describe('panel routing UAT (#166)', () => {
+  it('persists the final answer recap even when no later chat frame arrives', async () => {
+    const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
+    await driveToReady(h, [{ tenant: F5_KEY, env: 'production' }]);
+    const id = h.api().state.conv.id;
+    const recap = {
+      state: 'delivered' as const,
+      rows: [{ id: 'q', topic: 'Audience', question: 'Who?', answer: 'Developers — 東京\n  $(printf noop)' }],
+    };
+    h.api().recordAnswer({ id: 'receipt', recap, evidence: 'safe evidence' });
+    await waitFor(() => expect(h.api().state.conv.messages.some((m) => m.id === 'answer-receipt')).toBe(true));
+    const restored = await loadConversation(id);
+    expect(restored?.messages.find((m) => m.id === 'answer-receipt')?.questionPresentation).toEqual({
+      recap,
+      evidence: 'safe evidence',
+    });
+  });
+
   it('RC-1/RC-2: a send carries the panel tab id AND its current session key', async () => {
     const h = mount(F5_PROD_TAB, { 7: F5_PROD_TAB });
     // Bridge→worker→page all pass for this tab → the readiness gate unlocks input.

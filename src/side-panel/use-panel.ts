@@ -211,6 +211,8 @@ export function usePanel() {
     const t = now();
     const prev = stateRef.current.activation;
     const next = activationReducer(prev, event, t);
+    // Port snapshots can arrive back to back before Preact renders the dispatch.
+    stateRef.current = { ...stateRef.current, activation: next };
     for (const rec of newlyResolvedGates(prev, next))
       bus.post({ type: 'activation_timing', ...rec, tabId: boundTabId.current }); // tabId → SW keys the `gates` TTFT span to this tab's sid (#170)
     dispatch({ type: 'set_activation', activation: next });
@@ -637,6 +639,7 @@ export function usePanel() {
         : [...current.messages, message],
     };
     dispatch({ type: 'set_conv', conv });
+    saveConversation(conv).catch(() => {});
   }
 
   function refreshContext() {
