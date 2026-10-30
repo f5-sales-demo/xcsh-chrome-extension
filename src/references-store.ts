@@ -24,6 +24,9 @@ export interface StoredMessage {
   refs?: string[];
   tool?: string;
   ok?: boolean;
+  toolCallId?: string;
+  running?: boolean;
+  questionPresentation?: import('./chat-protocol').ChatToolNoticeMsg['questionPresentation'];
   aborted?: boolean;
   /** Why this turn aborted (drives the transcript's distinct message + Retry). */
   abortReason?: PanelAbortReason;
@@ -146,12 +149,21 @@ export function setMode(conv: Conversation, mode: InteractionMode, at: number): 
 
 export function appendToolNotice(
   conv: Conversation,
-  e: { id: string; tool: string; ok: boolean; detail?: string; at: number },
+  e: Omit<import('./chat-protocol').ChatToolNoticeMsg, 'type'> & { at: number },
 ): Conversation {
   const text = e.detail ?? `${e.tool}: ${e.ok ? 'ok' : 'failed'}`;
+  const metadata = {
+    ...(e.toolCallId ? { toolCallId: e.toolCallId } : {}),
+    ...(e.running !== undefined ? { running: e.running } : {}),
+    ...(e.questionPresentation ? { questionPresentation: e.questionPresentation } : {}),
+  };
+  const message: StoredMessage = { id: e.toolCallId ? `${e.id}:${e.toolCallId}` : e.id,
+    role: 'tool', text, at: e.at, tool: e.tool, ok: e.ok, ...metadata };
+  const existing = e.toolCallId ? conv.messages.findIndex(value => value.toolCallId === e.toolCallId) : -1;
   return {
     ...conv,
-    messages: [...conv.messages, { id: e.id, role: 'tool', text, at: e.at, tool: e.tool, ok: e.ok }],
+    messages: existing < 0 ? [...conv.messages, message] : conv.messages.map((value, index) =>
+      index === existing ? { ...value, ...message } : value),
     updatedAt: e.at,
   };
 }

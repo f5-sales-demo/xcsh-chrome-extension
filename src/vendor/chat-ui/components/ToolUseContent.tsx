@@ -4,7 +4,10 @@
  * are plain strings). `navigator.clipboard` is a browser standard — no host global.
  */
 import { useState } from "react";
+import { AnswerRecapView } from "../interactions/AnswerRecapView";
+import { questionToolRecap } from "../interactions/answer-recap";
 import type { ToolUseBlock } from "../types";
+import { CodePanel } from "./CodePanel";
 
 export interface ToolUseContentProps {
 	block: ToolUseBlock;
@@ -12,6 +15,13 @@ export interface ToolUseContentProps {
 
 export function ToolUseContent({ block }: ToolUseContentProps) {
 	const [copied, setCopied] = useState(false);
+	let args: unknown;
+	try {
+		args = block.input ? JSON.parse(block.input) : undefined;
+	} catch {
+		/* Incomplete streamed input. */
+	}
+	const question = questionToolRecap(block.toolName, args, block.output ?? "", block.running, block.ok);
 
 	function handleCopy(text: string) {
 		void navigator.clipboard.writeText(text).then(() => {
@@ -20,6 +30,7 @@ export function ToolUseContent({ block }: ToolUseContentProps) {
 		});
 	}
 
+	if (question) return <AnswerRecapView recap={question.recap} evidence={question.evidence} />;
 	return (
 		<div className="tool-use">
 			<div className="tool-summary">
@@ -31,7 +42,7 @@ export function ToolUseContent({ block }: ToolUseContentProps) {
 					<div className="tool-row">
 						<div className="tool-row-label">IN</div>
 						<div className="tool-row-content">
-							<pre>{block.input}</pre>
+							<CodePanel source={block.input} complete={!block.running} />
 						</div>
 						<button className="tool-copy-btn" type="button" onClick={() => handleCopy(block.input ?? "")}>
 							{copied ? "Copied" : "Copy"}
@@ -42,7 +53,7 @@ export function ToolUseContent({ block }: ToolUseContentProps) {
 					<div className="tool-row">
 						<div className="tool-row-label">OUT</div>
 						<div className="tool-row-content">
-							<pre>{block.output}</pre>
+							<CodePanel source={block.output} complete={!block.running} />
 						</div>
 					</div>
 				)}

@@ -96,13 +96,7 @@ export function usePanel() {
         );
         if (message.type === 'interaction_respond' && continuation) {
           chatId = continuation.chatId;
-          const msgId = `answer-summary-${crypto.randomUUID()}`;
-          const conv = appendUserMessage(stateRef.current.conv, {
-            id: msgId,
-            role: 'user',
-            text: continuation.summary,
-            at: now(),
-          });
+          const conv = startAssistant(stateRef.current.conv, `assistant-${chatId}`, now());
           answeredReceipts.current.add(message.responseId);
           if (answeredReceipts.current.size > 256) {
             const oldest = answeredReceipts.current.values().next().value;
@@ -506,6 +500,9 @@ export function usePanel() {
         tool: ev.tool,
         ok: ev.ok,
         detail: ev.detail,
+        toolCallId: ev.toolCallId,
+        running: ev.running,
+        questionPresentation: ev.questionPresentation,
         at: now(),
       });
       dispatch({ type: 'set_conv', conv });

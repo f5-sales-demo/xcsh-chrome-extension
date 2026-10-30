@@ -9,7 +9,7 @@ test('idle answer prepares a readable summary and correlated turn; streaming ans
     requestId: 'request',
   } as const;
   const result = prepareAnswerContinuation(command, false, () => 'fixed');
-  expect(result).toEqual({ chatId: 'answer-fixed', summary: 'Answer recorded: Montréal 東京' });
+  expect(result).toEqual({ chatId: 'c-answer-fixed' });
   expect(prepareAnswerContinuation(command, true, () => 'fixed')).toBeUndefined();
   expect(prepareAnswerContinuation({ type: 'interaction_snapshot' }, false, () => 'fixed')).toBeUndefined();
 });
