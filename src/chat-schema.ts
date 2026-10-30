@@ -123,6 +123,28 @@ export const ChatToolNoticeSchema = Type.Object({
   tool: Type.String(),
   ok: Type.Boolean(),
   detail: Type.Optional(Type.String()),
+  toolCallId: Type.Optional(Type.String()),
+  running: Type.Optional(Type.Boolean()),
+  questionPresentation: Type.Optional(
+    Type.Object({
+      recap: Type.Object({
+        state: Type.Union(
+          ['pending', 'recorded', 'queued', 'delivered', 'failed', 'interrupted'].map((value) => Type.Literal(value)),
+        ),
+        rows: Type.Array(
+          Type.Object({
+            id: Type.String(),
+            topic: Type.String(),
+            question: Type.String(),
+            answer: Type.String(),
+            description: Type.Optional(Type.String()),
+            notes: Type.Optional(Type.String()),
+          }),
+        ),
+      }),
+      evidence: Type.String(),
+    }),
+  ),
 });
 
 export const ChatKeepaliveSchema = Type.Object({

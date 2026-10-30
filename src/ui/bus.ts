@@ -19,12 +19,25 @@ export function createBus<E extends { type: string }>() {
 }
 
 export class PortBus {
-  constructor(private readonly port: chrome.runtime.Port) {}
+  private readonly snapshots = new Map<string, unknown>();
+  constructor(private readonly port: chrome.runtime.Port) {
+    port.onMessage.addListener((message: unknown) => {
+      if (!message || typeof message !== 'object') return;
+      const type = Reflect.get(message, 'type');
+      if (type === 'status' || type === 'bridges') {
+        this.snapshots.delete(type);
+        this.snapshots.set(type, message);
+      }
+    });
+  }
   post(msg: unknown): void {
     this.port.postMessage(msg);
   }
   on(fn: (msg: unknown) => void): () => void {
     this.port.onMessage.addListener(fn);
+    // Chrome can greet the Port before the component's effect subscribes.
+    // Retain connection state only; tool/chat frames must never be replayed.
+    for (const snapshot of this.snapshots.values()) fn(snapshot);
     return () => this.port.onMessage.removeListener(fn);
   }
 }

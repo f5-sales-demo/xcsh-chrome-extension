@@ -107,6 +107,9 @@ export interface ChatToolNoticeMsg {
   tool: string;
   ok: boolean;
   detail?: string;
+  toolCallId?: string;
+  running?: boolean;
+  questionPresentation?: { recap: import('./vendor/chat-ui/interactions/answer-recap').AnswerRecap; evidence: string };
 }
 
 /** Liveness signal: the worker is actively working the turn (e.g. streaming model

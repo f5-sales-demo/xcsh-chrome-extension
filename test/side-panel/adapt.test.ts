@@ -12,6 +12,31 @@ function addMsgs(base: ReturnType<typeof newConversation>, messages: Record<stri
 }
 
 describe('convToMessages', () => {
+  it('preserves safe question presentation and call identity on live and restored tool rows', () => {
+    const presentation = {
+      recap: { state: 'recorded', rows: [{ id: 'q', topic: 'Audience', question: 'Who?', answer: 'Developers' }] },
+      evidence: 'safe evidence',
+    };
+    const [message] = convToMessages(
+      conv([
+        {
+          id: 'row',
+          role: 'tool',
+          text: '',
+          at: 0,
+          tool: 'request_user_input',
+          toolCallId: 'call',
+          running: false,
+          questionPresentation: presentation,
+        },
+      ]),
+    );
+    expect(message).toMatchObject({
+      toolCallId: 'call',
+      answerRecap: presentation.recap,
+      answerEvidence: presentation.evidence,
+    });
+  });
   it('maps user / assistant / tool rows to the shared ChatMessage shape', () => {
     const out = convToMessages(
       conv([

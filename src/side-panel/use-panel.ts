@@ -96,13 +96,7 @@ export function usePanel() {
         );
         if (message.type === 'interaction_respond' && continuation) {
           chatId = continuation.chatId;
-          const msgId = `answer-summary-${crypto.randomUUID()}`;
-          const conv = appendUserMessage(stateRef.current.conv, {
-            id: msgId,
-            role: 'user',
-            text: continuation.summary,
-            at: now(),
-          });
+          const conv = startAssistant(stateRef.current.conv, `assistant-${chatId}`, now());
           answeredReceipts.current.add(message.responseId);
           if (answeredReceipts.current.size > 256) {
             const oldest = answeredReceipts.current.values().next().value;
@@ -217,6 +211,8 @@ export function usePanel() {
     const t = now();
     const prev = stateRef.current.activation;
     const next = activationReducer(prev, event, t);
+    // Port snapshots can arrive back to back before Preact renders the dispatch.
+    stateRef.current = { ...stateRef.current, activation: next };
     for (const rec of newlyResolvedGates(prev, next))
       bus.post({ type: 'activation_timing', ...rec, tabId: boundTabId.current }); // tabId → SW keys the `gates` TTFT span to this tab's sid (#170)
     dispatch({ type: 'set_activation', activation: next });
@@ -506,6 +502,9 @@ export function usePanel() {
         tool: ev.tool,
         ok: ev.ok,
         detail: ev.detail,
+        toolCallId: ev.toolCallId,
+        running: ev.running,
+        questionPresentation: ev.questionPresentation,
         at: now(),
       });
       dispatch({ type: 'set_conv', conv });
@@ -621,6 +620,28 @@ export function usePanel() {
     saveConversation(conv).catch(() => {});
   }
 
+  function recordAnswer(record: import('../vendor/chat-ui').AnswerRecapRecord) {
+    const current = stateRef.current.conv;
+    const id = `answer-${record.id}`;
+    const message = {
+      id,
+      role: 'user' as const,
+      text: '',
+      at: now(),
+      questionPresentation: { recap: record.recap, evidence: record.evidence ?? '' },
+    };
+    const exists = current.messages.some((value) => value.id === id);
+    const conv = {
+      ...current,
+      updatedAt: now(),
+      messages: exists
+        ? current.messages.map((value) => (value.id === id ? message : value))
+        : [...current.messages, message],
+    };
+    dispatch({ type: 'set_conv', conv });
+    saveConversation(conv).catch(() => {});
+  }
+
   function refreshContext() {
     bus.post({ type: 'get_page_context', tabId: boundTabId.current }); // no reqId → never gated (manual refresh)
   }
@@ -637,6 +658,7 @@ export function usePanel() {
 
   return {
     interactionTransport,
+    recordAnswer,
     state,
     contextLabel: contextChipText(state),
     placeholder: composerPlaceholder(state),

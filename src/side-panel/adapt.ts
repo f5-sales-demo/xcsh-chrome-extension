@@ -49,8 +49,27 @@ function citedSources(conv: Conversation, refIds: string[] | undefined): ChatRef
  */
 export function convToMessages(conv: Conversation): ChatMessage[] {
   return conv.messages.map((m): ChatMessage => {
+    if (m.role === 'user' && m.questionPresentation)
+      return {
+        id: m.id,
+        role: 'user',
+        text: '',
+        answerRecap: m.questionPresentation.recap,
+        answerEvidence: m.questionPresentation.evidence,
+      };
     if (m.role === 'tool') {
-      return { id: m.id, role: 'tool', text: m.text, tool: m.tool ?? 'tool', ok: m.ok ?? true };
+      return {
+        id: m.id,
+        role: 'tool',
+        text: m.text,
+        tool: m.tool ?? 'tool',
+        ok: m.ok ?? true,
+        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+        ...(m.running !== undefined ? { running: m.running } : {}),
+        ...(m.questionPresentation
+          ? { answerRecap: m.questionPresentation.recap, answerEvidence: m.questionPresentation.evidence }
+          : {}),
+      };
     }
     if (m.aborted) {
       if (!m.abortReason) return { id: m.id, role: m.role, text: 'Invalid abort state.', error: true };

@@ -345,6 +345,82 @@
         },
         "detail": {
           "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "questionPresentation": {
+          "type": "object",
+          "required": ["recap", "evidence"],
+          "properties": {
+            "recap": {
+              "type": "object",
+              "required": ["state", "rows"],
+              "properties": {
+                "state": {
+                  "anyOf": [
+                    {
+                      "const": "pending",
+                      "type": "string"
+                    },
+                    {
+                      "const": "recorded",
+                      "type": "string"
+                    },
+                    {
+                      "const": "queued",
+                      "type": "string"
+                    },
+                    {
+                      "const": "delivered",
+                      "type": "string"
+                    },
+                    {
+                      "const": "failed",
+                      "type": "string"
+                    },
+                    {
+                      "const": "interrupted",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "topic", "question", "answer"],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "topic": {
+                        "type": "string"
+                      },
+                      "question": {
+                        "type": "string"
+                      },
+                      "answer": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "notes": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "evidence": {
+              "type": "string"
+            }
+          }
         }
       }
     },
