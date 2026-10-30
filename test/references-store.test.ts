@@ -20,15 +20,47 @@ import {
 
 describe('conversation lifecycle', () => {
   it('updates a tool notice by call identity and preserves concurrent calls and safe recap metadata', () => {
-    const presentation = { recap: { state: 'recorded' as const, rows: [{ id: 'q', topic: 'Audience', question: 'Who?', answer: 'Developers' }] }, evidence: 'safe evidence' };
+    const presentation = {
+      recap: {
+        state: 'recorded' as const,
+        rows: [{ id: 'q', topic: 'Audience', question: 'Who?', answer: 'Developers' }],
+      },
+      evidence: 'safe evidence',
+    };
     let conversation = newConversation('conv', 0);
-    conversation = appendToolNotice(conversation, { id: 'turn', tool: 'request_user_input', toolCallId: 'one', running: true, ok: true, at: 1 } as any);
-    conversation = appendToolNotice(conversation, { id: 'turn', tool: 'request_user_input', toolCallId: 'two', running: true, ok: true, at: 2 } as any);
-    const end = { id: 'turn', tool: 'request_user_input', toolCallId: 'one', running: false, ok: true, at: 3, questionPresentation: presentation };
-    conversation = appendToolNotice(conversation, end as any);
-    conversation = appendToolNotice(conversation, end as any);
+    conversation = appendToolNotice(conversation, {
+      id: 'turn',
+      tool: 'request_user_input',
+      toolCallId: 'one',
+      running: true,
+      ok: true,
+      at: 1,
+    });
+    conversation = appendToolNotice(conversation, {
+      id: 'turn',
+      tool: 'request_user_input',
+      toolCallId: 'two',
+      running: true,
+      ok: true,
+      at: 2,
+    });
+    const end = {
+      id: 'turn',
+      tool: 'request_user_input',
+      toolCallId: 'one',
+      running: false,
+      ok: true,
+      at: 3,
+      questionPresentation: presentation,
+    };
+    conversation = appendToolNotice(conversation, end);
+    conversation = appendToolNotice(conversation, end);
     expect(conversation.messages).toHaveLength(2);
-    expect(conversation.messages[0]).toMatchObject({ toolCallId: 'one', running: false, questionPresentation: presentation });
+    expect(conversation.messages[0]).toMatchObject({
+      toolCallId: 'one',
+      running: false,
+      questionPresentation: presentation,
+    });
     expect(conversation.messages[1]).toMatchObject({ toolCallId: 'two', running: true });
   });
   it('titles from the first user message and streams an assistant reply', () => {

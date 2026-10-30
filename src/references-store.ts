@@ -157,13 +157,22 @@ export function appendToolNotice(
     ...(e.running !== undefined ? { running: e.running } : {}),
     ...(e.questionPresentation ? { questionPresentation: e.questionPresentation } : {}),
   };
-  const message: StoredMessage = { id: e.toolCallId ? `${e.id}:${e.toolCallId}` : e.id,
-    role: 'tool', text, at: e.at, tool: e.tool, ok: e.ok, ...metadata };
-  const existing = e.toolCallId ? conv.messages.findIndex(value => value.toolCallId === e.toolCallId) : -1;
+  const message: StoredMessage = {
+    id: e.toolCallId ? `${e.id}:${e.toolCallId}` : e.id,
+    role: 'tool',
+    text,
+    at: e.at,
+    tool: e.tool,
+    ok: e.ok,
+    ...metadata,
+  };
+  const existing = e.toolCallId ? conv.messages.findIndex((value) => value.toolCallId === e.toolCallId) : -1;
   return {
     ...conv,
-    messages: existing < 0 ? [...conv.messages, message] : conv.messages.map((value, index) =>
-      index === existing ? { ...value, ...message } : value),
+    messages:
+      existing < 0
+        ? [...conv.messages, message]
+        : conv.messages.map((value, index) => (index === existing ? { ...value, ...message } : value)),
     updatedAt: e.at,
   };
 }

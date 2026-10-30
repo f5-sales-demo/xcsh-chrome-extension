@@ -80,6 +80,12 @@ export function InteractionPanel({
 			} else if (message.type === "interaction_error") {
 				setFailures(current => new Map(current).set(message.failureId ?? message.itemId, message.message));
 			} else if (message.type === "interaction_event") {
+				if (message.revision <= revision.current) return;
+				if (message.revision !== revision.current + 1) {
+					transport.send({ type: "interaction_snapshot" });
+					return;
+				}
+				revision.current = message.revision;
 				if (message.event.presentation) {
 					presentationReceiver.current?.(
 						{
@@ -97,12 +103,7 @@ export function InteractionPanel({
 						}),
 					);
 				}
-				if (message.revision <= revision.current) return;
-				if (message.revision !== revision.current + 1) {
-					transport.send({ type: "interaction_snapshot" });
-					return;
-				}
-				revision.current = message.revision;
+
 				setPending(current =>
 					message.event.type === "opened"
 						? [...current.filter(value => value.id !== message.event.interaction.id), message.event.interaction]

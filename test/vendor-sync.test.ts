@@ -33,7 +33,7 @@ function listVendoredSource(dir: string): string[] {
 
 const manifest = JSON.parse(readFileSync(join(VENDOR_DIR, MANIFEST_NAME), 'utf8')) as {
   generatedFrom: string;
-  files: Record<string, string>;
+  files: { sha256: string; path: string }[];
 };
 
 describe('vendored chat-ui drift guard (verifySelf)', () => {
@@ -42,14 +42,14 @@ describe('vendored chat-ui drift guard (verifySelf)', () => {
   });
 
   it('every vendored file matches its recorded sha256 (no hand-edits / partial copy)', () => {
-    const problems = Object.entries(manifest.files).filter(([rel, expected]) => {
+    const problems = manifest.files.filter(({ path: rel, sha256: expected }) => {
       return sha256(readFileSync(join(VENDOR_DIR, rel))) !== expected;
     });
-    expect(problems.map(([rel]) => rel)).toEqual([]);
+    expect(problems.map(({ path }) => path)).toEqual([]);
   });
 
   it('has no stray vendored source file the manifest does not cover', () => {
-    const stray = listVendoredSource(VENDOR_DIR).filter((rel) => !(rel in manifest.files));
+    const stray = listVendoredSource(VENDOR_DIR).filter((rel) => !manifest.files.some((file) => file.path === rel));
     expect(stray).toEqual([]);
   });
 
@@ -69,7 +69,8 @@ describe('vendored chat-ui drift guard (verifySelf)', () => {
         .filter(Boolean)
         .map((p) => relative('src/vendor/chat-ui', p).split(sep).join('/')),
     );
-    const untracked = Object.keys(manifest.files)
+    const untracked = manifest.files
+      .map((file) => file.path)
       .concat(MANIFEST_NAME)
       .filter((rel) => !tracked.has(rel))
       .sort();
