@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnswerRecapView } from "./AnswerRecapView";
-import type { AnswerRecap } from "./answer-recap";
+import type { AnswerRecap, AnswerRecapRecord } from "./answer-recap";
 import type { ConversationPlan } from "./conversation-plan";
 import { PlanDecision } from "./PlanDecision";
 import { AsyncQuestionCard, QuestionCard } from "./QuestionCard";
@@ -13,9 +13,11 @@ export interface InteractionTransport {
 export function InteractionPanel({
 	transport,
 	onFollowTranscript,
+	onPresentation,
 }: {
 	transport: InteractionTransport;
 	onFollowTranscript?: () => void;
+	onPresentation?: (record: AnswerRecapRecord, fromSnapshot: boolean) => void;
 }) {
 	const [pending, setPending] = useState<PendingInteraction[]>([]);
 	const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
@@ -23,6 +25,8 @@ export function InteractionPanel({
 	const [plan, setPlan] = useState<ConversationPlan>();
 	const [failures, setFailures] = useState<Map<string, string>>(() => new Map());
 	const [recaps, setRecaps] = useState<Map<string, { recap: AnswerRecap; evidence?: string }>>(() => new Map());
+	const presentationReceiver = useRef(onPresentation);
+	presentationReceiver.current = onPresentation;
 	const revision = useRef(-1);
 	const sessionId = useRef<string | undefined>(undefined);
 	const attempts = useRef(new Map<string, { serialized: string; responseId: string }>());
@@ -67,16 +71,32 @@ export function InteractionPanel({
 				revision.current = message.revision;
 				setPending(message.pending);
 				setPlan(message.plan);
+				for (const record of message.presentations ?? []) {
+					setRecaps(current =>
+						new Map(current).set(record.id, { recap: record.recap, evidence: record.evidence }),
+					);
+					presentationReceiver.current?.(record, true);
+				}
 			} else if (message.type === "interaction_error") {
 				setFailures(current => new Map(current).set(message.failureId ?? message.itemId, message.message));
 			} else if (message.type === "interaction_event") {
-				if (message.event.presentation)
+				if (message.event.presentation) {
+					presentationReceiver.current?.(
+						{
+							id: message.event.interaction.id,
+							recap: message.event.presentation,
+							evidence: message.event.presentationEvidence,
+							toolCallId: message.event.interaction.identity?.itemId,
+						},
+						false,
+					);
 					setRecaps(current =>
 						new Map(current).set(message.event.interaction.id, {
 							recap: message.event.presentation!,
 							evidence: message.event.presentationEvidence,
 						}),
 					);
+				}
 				if (message.revision <= revision.current) return;
 				if (message.revision !== revision.current + 1) {
 					transport.send({ type: "interaction_snapshot" });
@@ -132,9 +152,10 @@ export function InteractionPanel({
 	}, [active]);
 	return (
 		<aside aria-label="Questions and plans">
-			{[...recaps].map(([id, value]) => (
-				<AnswerRecapView key={id} recap={value.recap} evidence={value.evidence} />
-			))}
+			{!onPresentation &&
+				[...recaps].map(([id, value]) => (
+					<AnswerRecapView key={id} recap={value.recap} evidence={value.evidence} />
+				))}
 			{[...failures].map(([id, message]) => (
 				<div key={id} role="alert">
 					{message}

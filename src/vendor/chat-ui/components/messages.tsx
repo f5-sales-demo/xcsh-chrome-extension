@@ -5,7 +5,7 @@
  */
 import { type ReactNode, useEffect, useState } from "react";
 import { AnswerRecapView } from "../interactions/AnswerRecapView";
-import { asyncReplyRecap } from "../interactions/answer-recap";
+import { type AnswerRecap, asyncReplyRecap } from "../interactions/answer-recap";
 import { GLYPHS } from "../theme/tokens";
 import { toolActivityLabel } from "../tools/activity-label";
 import type { ChatMediaContent, ChatMediaFrame, ChatReference } from "../types";
@@ -112,14 +112,16 @@ function RichMedia({ media }: { media: ChatMediaContent }) {
 
 export interface UserMessageProps {
 	text: string;
+	recap?: AnswerRecap;
+	evidence?: string;
 }
 
-export function UserMessage({ text }: UserMessageProps) {
-	const recap = asyncReplyRecap(text);
+export function UserMessage({ text, recap: supplied, evidence }: UserMessageProps) {
+	const recap = supplied ?? asyncReplyRecap(text);
 	return (
 		<div className="msg-user">
 			<GutterRow glyph={GLYPHS.userGutter} glyphClass="g-user">
-				<div className="body user-body">{recap ? <AnswerRecapView recap={recap} /> : text}</div>
+				<div className="body user-body">{recap ? <AnswerRecapView recap={recap} evidence={evidence} /> : text}</div>
 			</GutterRow>
 		</div>
 	);

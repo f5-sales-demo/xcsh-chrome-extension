@@ -1,4 +1,4 @@
-import { type AnswerRecap, DELIVERY_COPY } from "./answer-recap";
+import { type AnswerRecap, type AnswerRecapRecord, DELIVERY_COPY } from "./answer-recap";
 import type { InputQuestion } from "./contract";
 import type { ConversationPlan, PlanAction } from "./conversation-plan";
 
@@ -40,6 +40,7 @@ export type InteractionFrame =
 			sessionId: string;
 			revision: number;
 			pending: PendingInteraction[];
+			presentations?: AnswerRecapRecord[];
 			plan?: ConversationPlan;
 	  }
 	| {
@@ -156,7 +157,18 @@ export function isInteractionFrame(value: unknown): value is InteractionFrame {
 			Array.isArray(value.pending) &&
 			value.pending.length <= 32 &&
 			value.pending.every(pending) &&
-			(value.plan === undefined || plan(value.plan))
+			(value.plan === undefined || plan(value.plan)) &&
+			(value.presentations === undefined ||
+				(Array.isArray(value.presentations) &&
+					value.presentations.length <= 1024 &&
+					value.presentations.every(
+						entry =>
+							record(entry) &&
+							id(entry.id) &&
+							recap(entry.recap) &&
+							(entry.evidence === undefined || typeof entry.evidence === "string") &&
+							(entry.toolCallId === undefined || id(entry.toolCallId)),
+					)))
 		);
 	if (value.type === "interaction_event")
 		return (

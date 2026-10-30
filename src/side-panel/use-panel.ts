@@ -618,6 +618,15 @@ export function usePanel() {
     saveConversation(conv).catch(() => {});
   }
 
+  function recordAnswer(record: import('../vendor/chat-ui').AnswerRecapRecord) {
+    const current = stateRef.current.conv;
+    const id = `answer-${record.id}`;
+    const message = { id, role: 'user' as const, text: '', at: now(), questionPresentation: { recap: record.recap, evidence: record.evidence ?? '' } };
+    const exists = current.messages.some(value => value.id === id);
+    const conv = { ...current, updatedAt: now(), messages: exists ? current.messages.map(value => value.id === id ? message : value) : [...current.messages, message] };
+    dispatch({ type: 'set_conv', conv });
+  }
+
   function refreshContext() {
     bus.post({ type: 'get_page_context', tabId: boundTabId.current }); // no reqId → never gated (manual refresh)
   }
@@ -634,6 +643,7 @@ export function usePanel() {
 
   return {
     interactionTransport,
+    recordAnswer,
     state,
     contextLabel: contextChipText(state),
     placeholder: composerPlaceholder(state),

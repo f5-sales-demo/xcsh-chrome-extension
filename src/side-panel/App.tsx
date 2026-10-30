@@ -54,7 +54,7 @@ export function App() {
       />
       <Transcript messages={convToMessages(s.conv)} streaming={streaming} onRetry={p.resendMessage} />
       {s.activation.phase === 'ready' ? (
-        <InteractionPanel key={s.activation.runId} transport={p.interactionTransport} />
+        <InteractionPanel key={s.activation.runId} transport={p.interactionTransport} onPresentation={p.recordAnswer} />
       ) : null}
       <Composer
         ref={composerRef}

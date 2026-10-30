@@ -59,7 +59,7 @@ export { Transcript, type TranscriptProps } from "./components/Transcript";
 // ── Shared hooks ──────────────────────────────────────────────────────────
 export { type UseMenuResult, useMenu } from "./components/useMenu";
 export { AnswerRecapView } from "./interactions/AnswerRecapView";
-export type { AnswerDelivery, AnswerRecap, AnswerRecapRow } from "./interactions/answer-recap";
+export type { AnswerDelivery, AnswerRecap, AnswerRecapRecord, AnswerRecapRow } from "./interactions/answer-recap";
 export {
 	answerRecap,
 	asyncReplyRecap,

@@ -2,7 +2,7 @@ import { INPUT_COPY, type InputQuestion, type InputResponse } from "./contract";
 import { parseQuestionReplies } from "./question-reply";
 
 /** Presentation data only. Never substitute this for model-facing answers. */
-export type AnswerDelivery = "pending" | "recorded" | "queued" | "delivered" | "failed" | "interrupted";
+export type AnswerDelivery = "pending" | "asked" | "recorded" | "queued" | "delivered" | "failed" | "interrupted";
 export interface AnswerRecapRow {
 	id: string;
 	topic: string;
@@ -16,6 +16,13 @@ export interface AnswerRecap {
 	rows: AnswerRecapRow[];
 }
 
+export interface AnswerRecapRecord {
+	id: string;
+	recap: AnswerRecap;
+	evidence?: string;
+	toolCallId?: string;
+}
+
 /** Question identities survive replay and retries; text is never an identity. */
 export function unseenAnswerRecap(recap: AnswerRecap, seen: Set<string>): AnswerRecap | undefined {
 	const rows = recap.rows.filter(row => {
@@ -27,6 +34,7 @@ export function unseenAnswerRecap(recap: AnswerRecap, seen: Set<string>): Answer
 }
 export const DELIVERY_COPY: Record<AnswerDelivery, string> = {
 	pending: "Questions pending",
+	asked: "Questions asked",
 	recorded: "Answers recorded",
 	queued: "Queued for the next model response",
 	delivered: "Answers delivered",
@@ -47,7 +55,11 @@ function row(question: InputQuestion, values: readonly string[], encodedFreeText
 			? values.length
 				? "Answer hidden"
 				: "No answer provided"
-			: (selected ? selected.label.replace(/\s*\(Recommended\)$/i, "") : custom) || "No answer provided",
+			: (selected
+					? selected.label.replace(/\s*\(Recommended\)$/i, "")
+					: other
+						? custom || INPUT_COPY.other
+						: custom) || "No answer provided",
 		description: question.isSecret ? undefined : selected?.description || undefined,
 		notes: !question.isSecret && selected && values[1]?.startsWith("user_note: ") ? values[1].slice(11) : undefined,
 	};
@@ -69,7 +81,7 @@ export function recapText(recap: AnswerRecap): string {
 	return [
 		DELIVERY_COPY[recap.state],
 		...recap.rows.map(value =>
-			recap.state === "pending"
+			recap.state === "pending" || recap.state === "asked"
 				? value.question
 				: [
 						value.topic + " — " + value.answer,
@@ -177,7 +189,9 @@ export function questionToolRecap(
 			: "failed"
 		: response
 			? "recorded"
-			: "pending";
+			: tool === "request_user_input_async" && !running
+				? "asked"
+				: "pending";
 	const evidence = safeQuestionEvidence(questions, response);
 	return {
 		recap: answerRecap(questions, response, state),
