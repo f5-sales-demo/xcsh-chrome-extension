@@ -110,7 +110,7 @@
       "path": "index.ts"
     },
     {
-      "sha256": "7e9d6c0115db9b53fa583e26dcb46e3bf383d75c2e1ecee9974f44215cd33794",
+      "sha256": "5ae621f4d82f6f9e3ae4998f3cb92741c71be38588856f0dce5f16c97d074685",
       "path": "interactions/AnswerRecapView.tsx"
     },
     {
@@ -126,7 +126,7 @@
       "path": "interactions/QuestionCard.tsx"
     },
     {
-      "sha256": "787f5b57604b1d1b0212e595b97fa5e15cdd6156009b1bf352681982bfc72f4b",
+      "sha256": "114e42d0ba77001c838144d978411e74ee175fa9f0d6a452cb2361132d38ee1c",
       "path": "interactions/answer-recap.ts"
     },
     {
